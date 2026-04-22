@@ -2,92 +2,87 @@
 <html lang="vi">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>VinFleet — Nhận Xe</title>
-<link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;500;600;700;800;900&family=Syne:wght@700;800&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800&family=Syne:wght@700;800&display=swap" rel="stylesheet">
 <style>
 :root {
-  --red: #E8192C; --red-light: #fff0f1; --red-mid: #ffd6d9; --bg: #f0f2f8;
-  --bg-card: #ffffff; --bg-input: #f7f8fc; --border: #e4e7f2; --text: #1a1d2e;
-  --text-2: #565b7a; --text-3: #9599b3; --success: #16a34a; --success-light: #f0fdf4;
-  --success-border: #bbf7d0; --warning: #d97706; --warning-light: #fffbeb;
-  --shadow-sm: 0 1px 4px rgba(26,29,46,0.07); --shadow-md: 0 4px 20px rgba(26,29,46,0.09);
-  --shadow-lg: 0 12px 40px rgba(26,29,46,0.14); --radius: 18px; --radius-sm: 12px;
+  --red: #E8192C; --bg: #f3f4f9; --border: #e4e7f2; --text: #1a1d2e;
+  --radius: 16px; --shadow: 0 4px 12px rgba(0,0,0,0.05);
 }
 * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
-body { font-family: 'Nunito', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
-header { background: #fff; border-bottom: 1px solid var(--border); padding: 0 20px; height: 62px; display: flex; align-items: center; justify-content: space-between; position: sticky; top: 0; z-index: 100; box-shadow: var(--shadow-sm); }
-.logo { display: flex; align-items: center; gap: 10px; }
-.logo-emblem { width: 38px; height: 38px; border-radius: 11px; background: var(--red); display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 14px rgba(232,25,44,0.32); }
-.logo-emblem svg { width: 20px; height: 20px; }
-.logo-name { font-family: 'Syne', sans-serif; font-size: 19px; font-weight: 800; }
-.logo-name em { color: var(--red); font-style: normal; }
-.date-badge { background: var(--bg); border: 1px solid var(--border); border-radius: 20px; padding: 5px 12px; font-size: 11px; font-weight: 800; color: var(--text-2); }
-.hero { background: linear-gradient(135deg, #E8192C 0%, #ff3347 55%, #c2001a 100%); padding: 22px 20px 26px; position: relative; overflow: hidden; }
-.hero-title { font-family: 'Syne', sans-serif; font-size: 22px; font-weight: 800; color: #fff; margin-bottom: 5px; position: relative; z-index:1; }
-.hero-sub { font-size: 13px; color: rgba(255,255,255,0.72); font-weight: 600; position: relative; z-index:1; }
-.progress-bar-wrap { background: #fff; border-bottom: 1px solid var(--border); padding: 14px 20px; position: sticky; top: 62px; z-index: 99; box-shadow: var(--shadow-sm); }
-.prog-steps { max-width: 640px; margin: 0 auto; display: flex; position: relative; }
-.prog-step { flex: 1; display: flex; flex-direction: column; align-items: center; position: relative; }
-.prog-step:not(:last-child)::after { content:''; position:absolute; top: 13px; left: 60%; right: -40%; height: 2px; background: var(--border); }
-.prog-step.done:not(:last-child)::after { background: var(--red); }
-.prog-dot { width: 28px; height: 28px; border-radius: 50%; border: 2px solid var(--border); background: #fff; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 900; color: var(--text-3); z-index: 1; }
-.prog-step.active .prog-dot { background: var(--red); border-color: var(--red); color: #fff; box-shadow: 0 0 0 5px rgba(232,25,44,0.12); }
-.prog-step.done .prog-dot { background: var(--red); border-color: var(--red); color: #fff; }
-.prog-lbl { font-size: 9px; font-weight: 800; text-transform: uppercase; margin-top: 5px; color: var(--text-3); }
-.container { max-width: 640px; margin: 0 auto; padding: 18px 14px 120px; }
-.section { background: var(--bg-card); border-radius: var(--radius); border: 1.5px solid var(--border); margin-bottom: 12px; overflow: hidden; box-shadow: var(--shadow-sm); }
+body { font-family: 'Nunito', sans-serif; background: var(--bg); color: var(--text); padding-bottom: 100px; }
+
+/* HEADER & HERO */
+header { background: #fff; padding: 15px 20px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--border); position: sticky; top: 0; z-index: 100; }
+.logo { display: flex; align-items: center; gap: 8px; font-family: 'Syne', sans-serif; font-weight: 800; font-size: 18px; }
+.logo em { color: var(--red); font-style: normal; }
+.hero { background: var(--red); color: #fff; padding: 20px; }
+.hero h2 { font-family: 'Syne', sans-serif; font-size: 20px; }
+
+/* PROGRESS */
+.prog-wrap { background: #fff; padding: 15px; display: flex; border-bottom: 1px solid var(--border); overflow-x: auto; }
+.step { flex: 1; text-align: center; min-width: 60px; opacity: 0.4; transition: 0.3s; }
+.step.active { opacity: 1; font-weight: 800; color: var(--red); }
+.dot { width: 24px; height: 24px; background: #eee; border-radius: 50%; margin: 0 auto 5px; display: flex; align-items: center; justify-content: center; font-size: 12px; }
+.step.active .dot { background: var(--red); color: #fff; }
+
+/* SECTIONS */
+.container { padding: 15px; }
+.section { background: #fff; border-radius: var(--radius); border: 1px solid var(--border); margin-bottom: 10px; box-shadow: var(--shadow); overflow: hidden; }
+.sec-head { padding: 16px; display: flex; align-items: center; gap: 12px; cursor: pointer; font-weight: 700; }
+.sec-num { width: 28px; height: 28px; background: #f0f0f0; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 13px; }
 .section.open { border-color: var(--red); }
-.sec-head { display: flex; align-items: center; gap: 12px; padding: 15px 18px; cursor: pointer; }
-.sec-badge { width: 34px; height: 34px; border-radius: 50%; display: flex; align-items: center; justify-content: center; background: var(--bg); font-weight: 900; color: var(--text-3); border: 1.5px solid var(--border); }
-.sec-body { padding: 15px 18px; border-top: 1px solid var(--border); display: none; }
+.section.open .sec-num { background: var(--red); color: #fff; }
+.sec-body { padding: 0 16px 16px; display: none; }
 .section.open .sec-body { display: block; }
-.photo-grid { display: grid; grid-template-columns: repeat(3,1fr); gap: 10px; }
-.p-slot { aspect-ratio: 1; border-radius: 14px; border: 2px dashed var(--border); background: var(--bg); display: flex; flex-direction: column; align-items: center; justify-content: center; cursor: pointer; position: relative; overflow: hidden; }
-.p-slot img { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; }
-.field { margin-bottom: 14px; }
-.flabel { display:block; font-size:11px; font-weight:800; text-transform:uppercase; color:var(--text-2); margin-bottom:7px; }
-input, select, textarea { width:100%; background:var(--bg-input); border:1.5px solid var(--border); border-radius:var(--radius-sm); padding:12px; font-family:inherit; font-size:15px; outline:none; }
-.submit-area { position:fixed; bottom:0; left:0; right:0; padding:15px; background:rgba(240,242,248,0.95); backdrop-filter:blur(10px); border-top:1px solid var(--border); z-index:100; }
-.sub-btn { width:100%; max-width:640px; margin:0 auto; background:var(--red); color:#fff; border:none; border-radius:14px; padding:16px; font-weight:800; cursor:pointer; display:flex; align-items:center; justify-content:center; gap:10px; }
-.toast { position:fixed; top:75px; left:50%; transform:translateX(-50%); padding:10px 20px; border-radius:30px; color:#fff; z-index:1000; display:none; }
-.success-screen { display:none; flex-direction:column; align-items:center; padding:50px 20px; text-align:center; }
+
+/* PHOTO GRID - FIX LỖI ẨN INPUT */
+.photo-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+.p-slot { aspect-ratio: 1; background: #f8f9fc; border: 2px dashed #ccd0e0; border-radius: 12px; display: flex; flex-direction: column; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; cursor: pointer; overflow: hidden; position: relative; }
+.p-slot img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+input[type="file"] { display: none !important; } /* ẨN HOÀN TOÀN NÚT CHỌN TỆP XẤU */
+
+/* FORM ELEMENTS */
+input, select, textarea { width: 100%; padding: 12px; border: 1px solid var(--border); border-radius: 10px; font-family: inherit; font-size: 15px; margin-top: 8px; background: #fcfdfe; outline: none; }
+input:focus { border-color: var(--red); background: #fff; }
+
+/* BUTTONS */
+.btn-area { position: fixed; bottom: 0; left: 0; right: 0; padding: 15px; background: #fff; border-top: 1px solid var(--border); z-index: 100; }
+.sub-btn { width: 100%; max-width: 500px; margin: 0 auto; background: var(--red); color: #fff; border: none; padding: 16px; border-radius: 14px; font-weight: 800; font-size: 16px; cursor: pointer; display: block; }
+.sub-btn:disabled { opacity: 0.5; }
+
+#success { display: none; text-align: center; padding: 50px 20px; }
 </style>
 </head>
 <body>
 
 <header>
-  <div class="logo"><div class="logo-emblem"><svg viewBox="0 0 24 24" fill="white"><path d="M12 2L3 21h4.8L12 11 19.2 21H24L12 2z"/></svg></div><div class="logo-name">Vin<em>Fleet</em></div></div>
-  <div class="date-badge" id="dateChip"></div>
+  <div class="logo">Vin<em>Fleet</em></div>
+  <div id="dateChip" style="font-size: 12px; font-weight: 700;"></div>
 </header>
 
-<div class="hero">
-  <div class="hero-title">🚗 Phiếu nhận xe</div>
-  <div class="hero-sub">Vui lòng chụp đủ 6 ảnh và điền thông tin</div>
-</div>
+<div class="hero"><h2>🚗 Phiếu Nhận Xe</h2></div>
 
-<div class="progress-bar-wrap">
-  <div class="prog-steps">
-    <div class="prog-step active" id="ps1"><div class="prog-dot">1</div><div class="prog-lbl">Ảnh</div></div>
-    <div class="prog-step" id="ps2"><div class="prog-dot">2</div><div class="prog-lbl">Lái xe</div></div>
-    <div class="prog-step" id="ps3"><div class="prog-dot">3</div><div class="prog-lbl">P.Ban</div></div>
-    <div class="prog-step" id="ps4"><div class="prog-dot">4</div><div class="prog-lbl">Mục đích</div></div>
-    <div class="prog-step" id="ps5"><div class="prog-dot">5</div><div class="prog-lbl">Số km</div></div>
-    <div class="prog-step" id="ps6"><div class="prog-dot">6</div><div class="prog-lbl">Xong</div></div>
-  </div>
+<div class="prog-wrap">
+  <div class="step active" id="st1"><div class="dot">1</div>Ảnh</div>
+  <div class="step" id="st2"><div class="dot">2</div>Tài xế</div>
+  <div class="step" id="st3"><div class="dot">3</div>P.Ban</div>
+  <div class="step" id="st4"><div class="dot">4</div>Mục đích</div>
+  <div class="step" id="st5"><div class="dot">5</div>Số KM</div>
 </div>
 
 <div class="container" id="mainForm">
   <div class="section open" id="sec1">
-    <div class="sec-head" onclick="tog(1)"><div class="sec-badge">1</div><div style="flex:1">📸 Chụp ảnh xe (6 ảnh)</div></div>
+    <div class="sec-head" onclick="tog(1)"><div class="sec-num">1</div>📸 Chụp ảnh xe</div>
     <div class="sec-body">
       <div class="photo-grid">
-        <div class="p-slot" onclick="tf('i1')" id="s1"><span>🚗 Đầu</span></div>
-        <div class="p-slot" onclick="tf('i2')" id="s2"><span>🚙 Đuôi</span></div>
-        <div class="p-slot" onclick="tf('i3')" id="s3"><span>⬅️ Trái</span></div>
-        <div class="p-slot" onclick="tf('i4')" id="s4"><span>➡️ Phải</span></div>
-        <div class="p-slot" onclick="tf('i5')" id="s5"><span>🔢 ODO</span></div>
-        <div class="p-slot" onclick="tf('i6')" id="s6"><span>📄 Giấy tờ</span></div>
+        <div class="p-slot" onclick="tf('i1')" id="s1">🚗 Đầu xe</div>
+        <div class="p-slot" onclick="tf('i2')" id="s2">🚙 Đuôi xe</div>
+        <div class="p-slot" onclick="tf('i3')" id="s3">⬅️ Trái</div>
+        <div class="p-slot" onclick="tf('i4')" id="s4">➡️ Phải</div>
+        <div class="p-slot" onclick="tf('i5')" id="s5">🔢 ODO</div>
+        <div class="p-slot" onclick="tf('i6')" id="s6">📄 Giấy tờ</div>
       </div>
       <input type="file" id="i1" accept="image/*" onchange="hp(this,'s1','front')">
       <input type="file" id="i2" accept="image/*" onchange="hp(this,'s2','back')">
@@ -99,38 +94,23 @@ input, select, textarea { width:100%; background:var(--bg-input); border:1.5px s
   </div>
 
   <div class="section" id="sec2">
-    <div class="sec-head" onclick="tog(2)"><div class="sec-badge">2</div><div style="flex:1">👤 Thông tin lái xe</div></div>
+    <div class="sec-head" onclick="tog(2)"><div class="sec-num">2</div>👤 Thông tin lái xe</div>
     <div class="sec-body">
-      <div class="field"><label class="flabel">Họ và tên</label><input type="text" id="driverName" placeholder="Nguyễn Văn A"></div>
-      <div class="field"><label class="flabel">SĐT</label><input type="tel" id="driverPhone" placeholder="090..."></div>
+      <input type="text" id="name" placeholder="Họ và tên lái xe">
+      <input type="tel" id="phone" placeholder="Số điện thoại">
     </div>
   </div>
 
   <div class="section" id="sec3">
-    <div class="sec-head" onclick="tog(3)"><div class="sec-badge">3</div><div style="flex:1">🏢 Phòng ban</div></div>
+    <div class="sec-head" onclick="tog(3)"><div class="sec-num">3</div>🏢 Phòng ban</div>
     <div class="sec-body">
-      <select id="department">
+      <select id="dept">
         <option value="">-- Chọn phòng ban --</option>
-        <option>Kinh Doanh</option><option>Vận Hành</option><option>Marketing</option><option>Kỹ Thuật</option><option>Kế Toán</option>
+        <option>Kinh Doanh</option><option>Vận Hành</option><option>Kế Toán</option><option>Ban Giám Đốc</option>
       </select>
     </div>
   </div>
 
   <div class="section" id="sec4">
-    <div class="sec-head" onclick="tog(4)"><div class="sec-badge">4</div><div style="flex:1">🎯 Mục đích</div></div>
-    <div class="sec-body">
-      <select id="purpose"><option>Giao hàng</option><option>Gặp khách hàng</option><option>Công tác</option></select>
-      <div class="field" style="margin-top:10px"><input type="text" id="destination" placeholder="Điểm đến"></div>
-    </div>
-  </div>
-
-  <div class="section" id="sec5">
-    <div class="sec-head" onclick="tog(5)"><div class="sec-badge">5</div><div style="flex:1">📊 Số km hiện tại</div></div>
-    <div class="sec-body">
-      <input type="number" id="kmReading" placeholder="Nhập số ODO">
-    </div>
-  </div>
-</div>
-
-<div class="success-screen" id="sucScreen">
-  <div style="font-size:5
+    <div class="sec-head" onclick="tog(4)"><div class="sec-num">4</div>🎯 Mục đích</div>
+    <div class
