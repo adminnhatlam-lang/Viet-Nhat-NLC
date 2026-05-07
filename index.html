@@ -398,7 +398,7 @@ const M3_TO_KG=333;
 
 // ══════════════════════ STORAGE (Settings chỉ) ══════════════════════
 let imgFiles=[],trips=[],tripCounter=0,currentEntry=null,editIndex=-1;
-let _actIdx=-1,_actRoute='';
+let _actIdx=-1,_actRoute='',_actTripRowKey='';
 
 // Sheet là nguồn sự thật duy nhất → cache tạm thời
 let _sheetCache=[];    // dữ liệu từ Sheet
@@ -443,12 +443,22 @@ function p2(n){return String(n).padStart(2,'0');}
 function getPickDate(){const v=$('#pickDate').value;return v?fmtDate(new Date(v+'T00:00:00')):'---';}
 function toKg(v,u){return u==='tấn'?v*1000:v;}
 
+let _autoRefreshTimer=null;
 function switchTab(name,btn){
   document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
   document.querySelectorAll('.tab-btn').forEach(b=>b.classList.remove('active'));
   document.getElementById('page-'+name).classList.add('active');
   btn.classList.add('active');
-  if(name==='log') loadAndRenderLog();
+  if(name==='log'){
+    loadAndRenderLog();
+    // Tự động reload mỗi 30s khi đang ở tab Nhật Ký
+    clearInterval(_autoRefreshTimer);
+    _autoRefreshTimer=setInterval(()=>{
+      if(document.getElementById('page-log').classList.contains('active'))loadAndRenderLog();
+    },30000);
+  } else {
+    clearInterval(_autoRefreshTimer);
+  }
 }
 
 // ══════════════════════ LOAD FROM SHEET (nguồn duy nhất) ══════════════════════
@@ -508,9 +518,12 @@ function parseSheetRows(rows){
     const timestamp=timeStr?new Date(timeStr).getTime():0;
     if(!timestamp)return;
     const rKey=ROUTE_NAMES[routeKey]?routeKey:'HCM-DN';
-    const rowKey=timestamp+'|'+routeKey;
+    const rowKey=(groupId||String(timestamp))+'|'+routeKey;
     const trip={id:1,route:rKey,dk,mk,vm,km,channels:{'tong-sheet':{dong:{v:dk,u:'kg'},mat:{v:mk,u:'kg'},vang:{v:vm,u:'m³'},kem:{v:km,u:'m³'}}}};
     const actual=(actDong||actMat||actVang||actKem)?{dong:actDong,mat:actMat,vang:actVang,kem:actKem}:null;
+
+    // Gắn rowKey vào trip để updateActual biết đúng dòng Sheet
+    trip._rowKey=rowKey;
 
     if(groupId){
       if(!groups[groupId]){
@@ -520,8 +533,9 @@ function parseSheetRows(rows){
         const g=groups[groupId];
         if(!g.trips.find(t=>t.route===rKey))g.trips.push(trip);
         if(actual)g['act_'+rKey]=actual;
-        if(imgs.length&&!g.imgLinks.length)g.imgLinks=imgs;
+        if(imgs.length)g.imgLinks=[...new Set([...g.imgLinks,...imgs])];
         if(note&&!g.note)g.note=note;
+        // Giữ timestamp nhỏ nhất làm đại diện nhóm
         if(timestamp<g.timestamp)g.timestamp=timestamp;
       }
     } else {
@@ -545,16 +559,26 @@ function renderLog(entries){
   cont.innerHTML=filtered.map((e,idx)=>{
     const ts=e.timestamp?new Date(e.timestamp).toLocaleTimeString('vi-VN'):'';
     const routeCards=(e.trips||[]).map(trip=>buildLogRouteCard(e,idx,trip)).join('');
-    // Ảnh: ưu tiên imgLinks (Drive URL)
-    const imgHtml=(e.imgLinks||[]).filter(s=>s&&s.startsWith('http')).map(href=>
-      `<a href="${href}" target="_blank"><img style="width:60px;height:60px;border-radius:6px;object-fit:cover;border:1.5px solid var(--border);margin:2px;cursor:pointer;" src="${href}" onerror="this.parentElement.style.display='none'"></a>`
+    // Ảnh từ Drive: chuyển link xem → link thumbnail
+    function driveThumb(url){
+      const m=url.match(/\/d\/([a-zA-Z0-9_-]+)/);
+      if(m)return `https://drive.google.com/thumbnail?id=${m[1]}&sz=w200`;
+      return url;
+    }
+    const validImgs=(e.imgLinks||[]).filter(s=>s&&typeof s==='string'&&s.startsWith('http'));
+    const imgHtml=validImgs.map(href=>
+      `<a href="${href}" target="_blank" style="display:inline-block;">
+        <img style="width:70px;height:70px;border-radius:8px;object-fit:cover;border:2px solid var(--border);margin:2px;cursor:pointer;background:#f1f5f9;"
+          src="${driveThumb(href)}" loading="lazy"
+          onerror="this.src='${href}';this.onerror=()=>this.parentElement.style.display='none'">
+       </a>`
     ).join('');
     const isPending=!!e._pending;
     return `<div class="log-group">
       <div class="log-group-date">📅 ${e.pickDate||'---'} · ${ts} · 👤 ${e.user||'---'}${isPending?' <span style="color:#f59e0b;font-size:10px;">⏳ Chờ sync</span>':''}</div>
       ${routeCards}
-      ${imgHtml?`<div style="display:flex;flex-wrap:wrap;gap:4px;padding:4px 4px 8px;">${imgHtml}</div>`:''}
-      ${e.note?`<div style="font-size:12px;color:var(--muted);background:#f8fafc;padding:7px 10px;border-radius:6px;margin-bottom:6px;">📝 ${e.note}</div>`:''}
+      ${imgHtml?`<div style="display:flex;flex-wrap:wrap;gap:6px;padding:8px 6px 4px;background:#f8fafc;border-radius:0 0 8px 8px;margin-top:-4px;">${imgHtml}</div>`:''}
+      ${e.note?`<div style="font-size:12px;color:var(--muted);background:#f8fafc;padding:7px 10px;border-radius:6px;margin-top:4px;margin-bottom:6px;">📝 ${e.note}</div>`:''}
     </div>`;
   }).join('');
 }
@@ -730,6 +754,8 @@ function openActualEdit(eIdx,routeKey){
   const trip=(e.trips||[]).find(t=>t.route===routeKey)||{};
   const actual=e['act_'+routeKey]||{};
   const dk=trip.dk||0,mk=trip.mk||0,vm=trip.vm||0,km=trip.km||0;
+  // Lưu rowKey của TUYến cụ thể (không phải rowKey của group)
+  _actTripRowKey=trip._rowKey||e._rowKey||'';
   const booked={dong:dk,mat:mk,vang:vm,kem:km};
   const rName=ROUTE_NAMES[routeKey]||routeKey;
   const rows=TYPES.map(t=>`<div class="edit-cargo-row">
@@ -755,17 +781,23 @@ async function saveActualEdit(){
   };
   // Ghi vào cache
   e['act_'+_actRoute]=actual;
-  // Nếu là _fromSheet → sync lên Sheet
+  // Nếu là _fromSheet → sync lên Sheet (dùng rowKey của tuyến cụ thể)
   if(e._fromSheet){
     const s=getSettings();
-    if(s.scriptUrl&&e._rowKey){
+    const rk=_actTripRowKey||e._rowKey;
+    if(s.scriptUrl&&rk){
       try{
-        await fetch(s.scriptUrl,{method:'POST',body:JSON.stringify({
-          action:'updateActual',rowKey:e._rowKey,route:_actRoute,
+        const res=await fetch(s.scriptUrl,{method:'POST',body:JSON.stringify({
+          action:'updateActual',rowKey:rk,route:_actRoute,
           act_dong:actual.dong,act_mat:actual.mat,act_vang:actual.vang,act_kem:actual.kem
         })});
-        showToast('✅ Đã cập nhật số thực tế lên Sheet!');
-      }catch(err){showToast('✅ Đã lưu (sẽ sync sau)');}
+        const json=await res.json();
+        if(json.status==='ok'){
+          showToast('✅ Đã cập nhật số thực tế lên Sheet!');
+          // Reload ngay để máy khác thấy
+          setTimeout(()=>loadAndRenderLog(),600);
+        } else {showToast('⚠️ Lưu cục bộ, Sheet báo lỗi');}
+      }catch(err){showToast('✅ Đã lưu cục bộ (mất mạng)');}
     }
   } else {
     // pending local → update in array
