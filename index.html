@@ -530,7 +530,7 @@ function parseSheetRows(rows){
     const sheetStatus=String(row[18]||'none').trim(); // 'none'|'filed'|'paid'
     const invoiceNote=String(row[19]||'');
     const timestamp=timeStr?new Date(timeStr).getTime():0;
-    if(!timestamp)return;
+    if(!timestamp||isNaN(timestamp)||timestamp<0)return;
     // Nếu routeKey không hợp lệ thì dùng nguyên giá trị, không fallback 'HCM-DN'
     const rKey=routeKey||'HCM-DN';
     const rowKey=(groupId||String(timestamp))+'|'+routeKey;
@@ -561,8 +561,17 @@ function parseSheetRows(rows){
         if(timestamp<g.timestamp)g.timestamp=timestamp;
       }
     } else {
-      // Không có groupId → group theo pickDate+user để gộp các tuyến cùng ngày/người
-      const autoGroupKey='auto_'+pickDate+'_'+user;
+      // Không có groupId → group theo timestamp gần nhau ±3 phút + cùng user
+      // Tránh gộp nhầm 2 booking khác nhau cùng ngày
+      const THREE_MIN=3*60*1000;
+      let matchKey=null;
+      for(const k of Object.keys(groups)){
+        const gx=groups[k];
+        if(gx.user===user && Math.abs((gx.timestamp||0)-timestamp)<THREE_MIN){
+          matchKey=k; break;
+        }
+      }
+      const autoGroupKey=matchKey||('auto_'+timestamp+'_'+user);
       if(!groups[autoGroupKey]){
         const ag0={pickDate,user,note,timestamp,imgLinks:imgs,trips:[trip],_rowKey:rowKey,_fromSheet:true};
         if(invoiceNote)ag0['_inv_'+rKey]=invoiceNote;
@@ -688,7 +697,8 @@ function buildLogRouteCard(e,eKey,trip){
 
   // Tổng quy đổi box
   let totalBox='';
-  if(bookTong>0&&(vm>0||km>0)){
+  // Hiện thanh tổng khi có bất kỳ số liệu nào (không chỉ khi có m³)
+  if(bookTong>0||disTong>0){
     const isAct=hasActual;
     const label=isAct?'📊 TỔNG THỰC TẾ':'📊 TỔNG QUY ĐỔI';
     const tVal=isAct?disTong:bookTong;
@@ -704,9 +714,10 @@ function buildLogRouteCard(e,eKey,trip){
       if(vm>0)parts2.push(`🍦 ${fmtN(vm)}m³×333=${fmtN(Math.round(vm*M3_TO_KG))}`);
       if(km>0)parts2.push(`🍨 ${fmtN(km)}m³×333=${fmtN(Math.round(km*M3_TO_KG))}`);
     }
+    // Luôn hiện thanh tổng kể cả khi chỉ có kg, không có m³
     totalBox=`<div style="background:linear-gradient(135deg,#1e3a5f,#1e4976);border-radius:8px;padding:8px 12px;margin-top:8px;display:flex;align-items:center;flex-wrap:wrap;gap:6px;">
       <span style="font-size:10px;letter-spacing:1.5px;color:#94a3b8;font-weight:700;flex-shrink:0;">${label}</span>
-      <span style="font-size:10px;color:#cbd5e1;flex:1;">${parts2.join(' + ')} kg</span>
+      <span style="font-size:10px;color:#cbd5e1;flex:1;">${parts2.length?parts2.join(' + '):''} kg</span>
       <span style="font-size:14px;font-weight:800;color:#f59e0b;">${fmtN(Math.round(tVal))} kg</span>
     </div>`;
   }
