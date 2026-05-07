@@ -367,7 +367,7 @@ textarea{resize:vertical;min-height:52px;}
   <div class="edit-modal">
     <div class="edit-modal-title" id="editModalTitle">✏️ Chỉnh Sửa</div>
     <div id="editBody"></div>
-    <button class="save-edit-btn" id="saveEditBtn" onclick="saveEdit()">💾 Lưu</button>
+    <button class="save-edit-btn" id="saveEditBtn">💾 Lưu</button>
     <button class="cancel-edit-btn" onclick="closeEdit()">Huỷ</button>
   </div>
 </div>
@@ -521,7 +521,7 @@ function parseSheetRows(rows){
     const actVang=parseFloat(row[15])||0;
     const actKem=parseFloat(row[16])||0;
     const groupId=String(row[17]||'');
-    const sheetStatus=String(row[18]||'none').trim();
+    const sheetStatus=String(row[18]||'none').trim(); // 'none'|'filed'|'paid'
     const invoiceNote=String(row[19]||'');
     const timestamp=timeStr?new Date(timeStr).getTime():0;
     if(!timestamp)return;
@@ -536,7 +536,10 @@ function parseSheetRows(rows){
 
     if(groupId){
       if(!groups[groupId]){
-        groups[groupId]={pickDate,user,note,timestamp,imgLinks:imgs,trips:[trip],_groupId:groupId,_rowKey:rowKey,_fromSheet:true,_status:sheetStatus,invoiceNote};
+        const g0={pickDate,user,note,timestamp,imgLinks:imgs,trips:[trip],_groupId:groupId,_rowKey:rowKey,_fromSheet:true,invoiceNote};
+        if(sheetStatus==='filed'||sheetStatus==='paid')g0['_filed_'+rKey]=true;
+        if(sheetStatus==='paid')g0['_paid_'+rKey]=true;
+        groups[groupId]=g0;
         if(actual)groups[groupId]['act_'+rKey]=actual;
       } else {
         const g=groups[groupId];
@@ -544,7 +547,8 @@ function parseSheetRows(rows){
         if(actual)g['act_'+rKey]=actual;
         if(imgs.length)g.imgLinks=[...new Set([...g.imgLinks,...imgs])];
         if(note&&!g.note)g.note=note;
-        if(sheetStatus&&sheetStatus!=='none'&&!g._status)g._status=sheetStatus;
+        if(sheetStatus==='filed'||sheetStatus==='paid')g['_filed_'+rKey]=true;
+        if(sheetStatus==='paid')g['_paid_'+rKey]=true;
         if(invoiceNote&&!g.invoiceNote)g.invoiceNote=invoiceNote;
         // Giữ timestamp nhỏ nhất làm đại diện nhóm
         if(timestamp<g.timestamp)g.timestamp=timestamp;
@@ -553,15 +557,19 @@ function parseSheetRows(rows){
       // Không có groupId → group theo pickDate+user để gộp các tuyến cùng ngày/người
       const autoGroupKey='auto_'+pickDate+'_'+user;
       if(!groups[autoGroupKey]){
-        groups[autoGroupKey]={pickDate,user,note,timestamp,imgLinks:imgs,trips:[trip],_rowKey:rowKey,_fromSheet:true,_status:sheetStatus,invoiceNote};
-        if(actual)groups[autoGroupKey]['act_'+rKey]=actual;
+        const ag0={pickDate,user,note,timestamp,imgLinks:imgs,trips:[trip],_rowKey:rowKey,_fromSheet:true,invoiceNote};
+        if(sheetStatus==='filed'||sheetStatus==='paid')ag0['_filed_'+rKey]=true;
+        if(sheetStatus==='paid')ag0['_paid_'+rKey]=true;
+        if(actual)ag0['act_'+rKey]=actual;
+        groups[autoGroupKey]=ag0;
       } else {
         const g=groups[autoGroupKey];
         if(!g.trips.find(t=>t.route===rKey))g.trips.push(trip);
         if(actual)g['act_'+rKey]=actual;
         if(imgs.length)g.imgLinks=[...new Set([...g.imgLinks,...imgs])];
         if(note&&!g.note)g.note=note;
-        if(sheetStatus&&sheetStatus!=='none')g._status=sheetStatus;
+        if(sheetStatus==='filed'||sheetStatus==='paid')g['_filed_'+rKey]=true;
+        if(sheetStatus==='paid')g['_paid_'+rKey]=true;
         if(invoiceNote)g.invoiceNote=invoiceNote;
         if(timestamp<g.timestamp)g.timestamp=timestamp;
       }
@@ -616,11 +624,12 @@ function renderLog(entries){
 function buildLogRouteCard(e,eKey,trip){
   const rName=ROUTE_NAMES[trip.route]||trip.route;
   // Status từ local meta hoặc từ entry
-  // Status: ưu tiên từ Sheet (_status), sau đó local meta
-  const status=e['_status']||'none';
-  const sbCls=status==='paid'?'lsb-paid':status==='filed'?'lsb-filed':'lsb-none';
-  const sbTxt=status==='paid'?'✅ Đã thanh toán':status==='filed'?'📋 Đã lập hồ sơ':'⏳ Chờ xử lý';
-  const cardCls=status==='paid'?'status-paid':status==='filed'?'status-filed':'';
+  // filed và paid là 2 trạng thái RIÊNG BIỆT theo từng tuyến
+  const isFiled=!!(e['_filed_'+trip.route]);
+  const isPaid=!!(e['_paid_'+trip.route]);
+  const sbCls=isPaid?'lsb-paid':isFiled?'lsb-filed':'lsb-none';
+  const sbTxt=isPaid?'✅ Đã thanh toán':isFiled?'📋 Đã lập hồ sơ':'⏳ Chờ xử lý';
+  const cardCls=isPaid?'status-paid':isFiled?'status-filed':'';
 
   // Số book từ trip
   const dk=trip.dk||0, mk=trip.mk||0, vm=trip.vm||0, km=trip.km||0;
@@ -721,8 +730,8 @@ function buildLogRouteCard(e,eKey,trip){
     <div class="log-ch-detail" id="${detailId}">${chDetail||'<span style="color:var(--muted2);font-size:12px;">Không có dữ liệu kênh</span>'}</div>
     <div class="log-card-body">${totalBox}${actualHtml}</div>
     <div class="log-card-footer">
-      <button class="btn-ls btn-ls-filed ${status==='filed'||status==='paid'?'on':''}" onclick="toggleStatus('${eKey}','${trip.route}','filed')">📋 Hồ Sơ</button>
-      <button class="btn-ls btn-ls-paid ${status==='paid'?'on':''}" onclick="toggleStatus('${eKey}','${trip.route}','paid')">✅ TT</button>
+      <button class="btn-ls btn-ls-filed ${isFiled||isPaid?'on':''}" onclick="toggleStatus('${eKey}','${trip.route}','filed')">📋 Hồ Sơ</button>
+      <button class="btn-ls btn-ls-paid ${isPaid?'on':''}" onclick="toggleStatus('${eKey}','${trip.route}','paid')">✅ TT</button>
       <span class="log-ftr-spacer"></span>
       <button class="btn-ls btn-ls-share" onclick="shareTripLog('${eKey}','${trip.route}')">💬</button>
       <button class="btn-ls" style="background:#f1f5f9;border:1.5px solid var(--border2);color:var(--text);" onclick="openInvoiceEdit('${eKey}')">✏️</button>
@@ -735,24 +744,33 @@ function buildLogRouteCard(e,eKey,trip){
 function toggleChDetail(id){const el=document.getElementById(id);if(el)el.classList.toggle('open');}
 
 async function toggleStatus(eKey,routeKey,newStatus){
-  const allEntries=_sheetCache.concat(_pendingLocal);
   const e=(window._logEntryMap||{})[eKey];if(!e)return;
-  const cur=e._status||'none';
-  const next=cur===newStatus?'none':newStatus;
-  e._status=next;
-  // Update tất cả trips cùng group
-  allEntries.filter(x=>x._groupId&&x._groupId===e._groupId).forEach(x=>x._status=next);
+  const fieldKey='_'+newStatus+'_'+routeKey;
+  // Toggle riêng biệt: filed và paid độc lập nhau theo từng tuyến
+  const curVal=!!(e[fieldKey]);
+  const nextVal=!curVal;
+  e[fieldKey]=nextVal;
+  // Nếu paid=true thì filed cũng true; nếu bỏ filed thì bỏ cả paid
+  if(newStatus==='paid'&&nextVal) e['_filed_'+routeKey]=true;
+  if(newStatus==='filed'&&!nextVal) e['_paid_'+routeKey]=false;
   renderLog(_sheetCache.concat(_pendingLocal));
-  const st=next;
-  showToast(st==='paid'?'✅ Đã thanh toán':st==='filed'?'📋 Đã lập hồ sơ':'↩️ Đã bỏ trạng thái');
-  // Sync lên Sheet
+  // Tạo status string để lưu Sheet: none/filed/paid
+  const isFiled=!!(e['_filed_'+routeKey]);
+  const isPaid=!!(e['_paid_'+routeKey]);
+  const statusStr=isPaid?'paid':isFiled?'filed':'none';
+  showToast(statusStr==='paid'?'✅ Đã thanh toán':statusStr==='filed'?'📋 Đã lập hồ sơ':'↩️ Đã bỏ trạng thái');
+  // Sync lên Sheet - tìm rowKey của tuyến cụ thể
   const s=getSettings();
-  if(s.scriptUrl&&e._rowKey){
-    try{
-      await fetch(s.scriptUrl,{method:'POST',body:JSON.stringify({
-        action:'updateStatus',groupId:e._groupId||'',rowKey:e._rowKey,status:next
-      })});
-    }catch(err){}
+  if(s.scriptUrl){
+    const trip=(e.trips||[]).find(t=>t.route===routeKey);
+    const rk=trip?._rowKey||e._rowKey;
+    if(rk){
+      try{
+        await fetch(s.scriptUrl,{method:'POST',body:JSON.stringify({
+          action:'updateStatus',groupId:e._groupId||'',rowKey:rk,status:statusStr
+        })});
+      }catch(err){}
+    }
   }
 }
 
@@ -802,7 +820,9 @@ function openActualEdit(eKey,routeKey){
   </div>`).join('');
   $('#editModalTitle').textContent=`📦 Số thực tế – ${rName}`;
   $('#editBody').innerHTML=`<div style="background:#f0f6ff;border-radius:8px;padding:10px;font-size:12px;color:#1e4976;margin-bottom:12px;">Nhập số <strong>thực tế</strong> sau khi bốc hàng. Để trống = giữ số đặt.</div>${rows}`;
-  $('#saveEditBtn').onclick=saveActualEdit;
+  const btn=$('#saveEditBtn');
+  btn.replaceWith(btn.cloneNode(true)); // xóa listener cũ
+  $('#saveEditBtn').addEventListener('click', saveActualEdit);
   $('#editModal').classList.add('open');
 }
 
@@ -1087,7 +1107,9 @@ function openEditLog(eKey){
   editIndex=eIdx;
   $('#editModalTitle').textContent='✏️ Chỉnh Sửa Nhật Ký';
   $('#editBody').innerHTML=`<div class="grid2" style="margin-bottom:12px"><div><label>📅 Ngày</label><input type="text" id="edit-date" value="${e.pickDate||''}"></div><div><label>📝 Ghi chú</label><input type="text" id="edit-note" value="${e.note||''}"></div></div>`;
-  $('#saveEditBtn').onclick=saveEditLog;
+  const btnEdit=$('#saveEditBtn');
+  btnEdit.replaceWith(btnEdit.cloneNode(true));
+  $('#saveEditBtn').addEventListener('click', saveEditLog);
   $('#editModal').classList.add('open');
 }
 function saveEditLog(){
@@ -1100,7 +1122,6 @@ function saveEditLog(){
 function closeEdit(){
   $('#editModal').classList.remove('open');
   editIndex=-1;_actIdx=-1;_actRoute='';_invoiceRowKey='';
-  $('#saveEditBtn').onclick=saveEditLog;
   $('#editModalTitle').textContent='✏️ Chỉnh Sửa';
 }
 
@@ -1115,7 +1136,9 @@ function openInvoiceEdit(eKey){
       <input type="text" id="invoice-note" placeholder="VD: HD001, TT ngày 08/05..." value="${e.invoiceNote||''}"
         style="width:100%;padding:10px;border:1.5px solid var(--border);border-radius:8px;font-size:14px;font-family:'Be Vietnam Pro',sans-serif;">
     </div>`;
-  $('#saveEditBtn').onclick=saveInvoiceEdit;
+  const btnInv=$('#saveEditBtn');
+  btnInv.replaceWith(btnInv.cloneNode(true));
+  $('#saveEditBtn').addEventListener('click', saveInvoiceEdit);
   $('#editModal').classList.add('open');
 }
 
