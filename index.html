@@ -542,7 +542,8 @@ function parseSheetRows(rows){
 
     if(groupId){
       if(!groups[groupId]){
-        const g0={pickDate,user,note,timestamp,imgLinks:imgs,trips:[trip],_groupId:groupId,_rowKey:rowKey,_fromSheet:true,invoiceNote};
+        const g0={pickDate,user,note,timestamp,imgLinks:imgs,trips:[trip],_groupId:groupId,_rowKey:rowKey,_fromSheet:true};
+        if(invoiceNote)g0['_inv_'+rKey]=invoiceNote;
         if(sheetStatus==='filed'||sheetStatus==='paid')g0['_filed_'+rKey]=true;
         if(sheetStatus==='paid')g0['_paid_'+rKey]=true;
         groups[groupId]=g0;
@@ -555,7 +556,7 @@ function parseSheetRows(rows){
         if(note&&!g.note)g.note=note;
         if(sheetStatus==='filed'||sheetStatus==='paid')g['_filed_'+rKey]=true;
         if(sheetStatus==='paid')g['_paid_'+rKey]=true;
-        if(invoiceNote&&!g.invoiceNote)g.invoiceNote=invoiceNote;
+        if(invoiceNote)g['_inv_'+rKey]=invoiceNote;
         // Giữ timestamp nhỏ nhất làm đại diện nhóm
         if(timestamp<g.timestamp)g.timestamp=timestamp;
       }
@@ -563,7 +564,8 @@ function parseSheetRows(rows){
       // Không có groupId → group theo pickDate+user để gộp các tuyến cùng ngày/người
       const autoGroupKey='auto_'+pickDate+'_'+user;
       if(!groups[autoGroupKey]){
-        const ag0={pickDate,user,note,timestamp,imgLinks:imgs,trips:[trip],_rowKey:rowKey,_fromSheet:true,invoiceNote};
+        const ag0={pickDate,user,note,timestamp,imgLinks:imgs,trips:[trip],_rowKey:rowKey,_fromSheet:true};
+        if(invoiceNote)ag0['_inv_'+rKey]=invoiceNote;
         if(sheetStatus==='filed'||sheetStatus==='paid')ag0['_filed_'+rKey]=true;
         if(sheetStatus==='paid')ag0['_paid_'+rKey]=true;
         if(actual)ag0['act_'+rKey]=actual;
@@ -576,7 +578,7 @@ function parseSheetRows(rows){
         if(note&&!g.note)g.note=note;
         if(sheetStatus==='filed'||sheetStatus==='paid')g['_filed_'+rKey]=true;
         if(sheetStatus==='paid')g['_paid_'+rKey]=true;
-        if(invoiceNote)g.invoiceNote=invoiceNote;
+        if(invoiceNote)g['_inv_'+rKey]=invoiceNote;
         if(timestamp<g.timestamp)g.timestamp=timestamp;
       }
     }
@@ -740,10 +742,10 @@ function buildLogRouteCard(e,eKey,trip){
       <button class="btn-ls btn-ls-paid ${isPaid?'on':''}" onclick="toggleStatus('${eKey}','${trip.route}','paid')">✅ TT</button>
       <span class="log-ftr-spacer"></span>
       <button class="btn-ls btn-ls-share" onclick="shareTripLog('${eKey}','${trip.route}')">💬</button>
-      <button class="btn-ls" style="background:#f1f5f9;border:1.5px solid var(--border2);color:var(--text);" onclick="openInvoiceEdit('${eKey}')">✏️</button>
+      <button class="btn-ls" style="background:#f1f5f9;border:1.5px solid var(--border2);color:var(--text);" onclick="openInvoiceEdit('${eKey}','${trip.route}')">✏️</button>
       <button class="btn-ls btn-ls-del" onclick="deleteEntry('${eKey}')">🗑️</button>
     </div>
-    ${e.invoiceNote?`<div style="background:#fefce8;border-left:3px solid #f59e0b;padding:6px 12px;font-size:12px;color:#92400e;border-radius:0 0 8px 8px;">📄 Số HD: ${e.invoiceNote}</div>`:''}
+    ${e['_inv_'+trip.route]?`<div style="background:#fefce8;border-left:3px solid #f59e0b;padding:6px 12px;font-size:12px;color:#92400e;border-radius:0 0 8px 8px;">📄 Số HD: ${e['_inv_'+trip.route]}</div>`:''}
   </div>`;
 }
 
@@ -1130,15 +1132,17 @@ function closeEdit(){
   $('#editBody').innerHTML='';
 }
 
-let _invoiceEIdx=-1,_invoiceRowKey='';
-function openInvoiceEdit(eKey){
-  _invoiceEIdx=eKey;_invoiceRowKey='';
+let _invoiceEIdx='',_invoiceRowKey='',_invoiceRoute='';
+function openInvoiceEdit(eKey,routeKey){
+  _invoiceEIdx=eKey;_invoiceRowKey='';_invoiceRoute=routeKey||'';
   const e=(window._logEntryMap||{})[eKey]||{};
-  $('#editModalTitle').textContent='✏️ Số Hoá Đơn / Ghi Chú HĐ';
+  const cur=e['_inv_'+(routeKey||'')]||'';
+  const rName=ROUTE_NAMES[routeKey]||routeKey||'';
+  $('#editModalTitle').textContent='✏️ Số HD – '+rName;
   $('#editBody').innerHTML=`
     <div style="margin-bottom:12px;">
       <label style="font-size:11px;color:var(--muted);font-weight:700;display:block;margin-bottom:5px;letter-spacing:.5px;">📄 SỐ HOÁ ĐƠN / GHI CHÚ</label>
-      <input type="text" id="invoice-note" placeholder="VD: HD001, TT ngày 08/05..." value="${e.invoiceNote||''}"
+      <input type="text" id="invoice-note" placeholder="VD: HD001, TT ngày 08/05..." value="${cur}"
         style="width:100%;padding:10px;border:1.5px solid var(--border);border-radius:8px;font-size:14px;font-family:'Be Vietnam Pro',sans-serif;">
     </div>`;
   _currentSaveAction='invoice';
@@ -1149,25 +1153,25 @@ async function saveInvoiceEdit(){
   const e=(window._logEntryMap||{})[_invoiceEIdx||''];
   if(!e){closeEdit();return;}
   const note=$('#invoice-note')?.value?.trim()||'';
-  e.invoiceNote=note;
-  // Update tất cả entries cùng group
-  const allE=_sheetCache.concat(_pendingLocal);
-  allE.filter(x=>x._groupId&&x._groupId===e._groupId).forEach(x=>x.invoiceNote=note);
-  closeEdit();renderLog(allE);
+  const rKey=_invoiceRoute;
+  // Lưu theo từng tuyến riêng
+  e['_inv_'+rKey]=note;
+  closeEdit();
+  renderLog(_sheetCache.concat(_pendingLocal));
   showToast('✅ Đã lưu số hoá đơn');
-  // Sync lên Sheet - dùng groupId để cập nhật TẤT CẢ dòng của booking
+  // Sync lên Sheet – tìm đúng rowKey của tuyến này
   const s=getSettings();
   if(s.scriptUrl){
+    const trip=(e.trips||[]).find(t=>t.route===rKey);
+    const rk=trip?._rowKey||e._rowKey||'';
     try{
-      const gid=e._groupId||e._rowKey||'';
       const res=await fetch(s.scriptUrl,{method:'POST',body:JSON.stringify({
-        action:'updateInvoice',groupId:gid,rowKey:e._rowKey||'',invoiceNote:note
+        action:'updateInvoice',rowKey:rk,invoiceNote:note
       })});
       const json=await res.json();
       if(json.status==='ok') showToast('✅ Đã lưu số HD lên Sheet!');
     }catch(err){showToast('✅ Đã lưu cục bộ');}
   }
-  // Reload để cập nhật từ Sheet
   setTimeout(()=>loadAndRenderLog(),800);
 }
 
