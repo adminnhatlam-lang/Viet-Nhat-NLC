@@ -478,6 +478,7 @@ async function loadAndRenderLog(){
     const res=await fetch(s.scriptUrl+'?action=getLogs&limit=300');
     const json=await res.json();
     if(json.status==='ok'&&Array.isArray(json.rows)){
+      console.log('[NL] Received',json.rows?.length,'rows from Sheet');
       _sheetCache=parseSheetRows(json.rows);
       // Merge local meta (status, actual edits) vào sheet cache
       const meta=getLocalMeta();
@@ -497,6 +498,7 @@ async function loadAndRenderLog(){
 
 // Parse mảng rows từ Sheet thành danh sách entry (mỗi row = 1 tuyến)
 function parseSheetRows(rows){
+  console.log('[NL] Parsing',rows.length,'rows from Sheet');
   const groups={};
   const result=[];
   // Đảo ngược để dòng mới nhất được xử lý cuối (nhưng sort lại sau)
@@ -510,7 +512,10 @@ function parseSheetRows(rows){
     const vm=parseFloat(row[6])||0;
     const km=parseFloat(row[7])||0;
     const note=String(row[8]||'');
-    const imgs=[row[9],row[10],row[11],row[12]].map(String).filter(s=>s&&s!=='false'&&s.startsWith('http'));
+    const imgs=[row[9],row[10],row[11],row[12]].map(s=>String(s||'')).filter(s=>{
+      if(!s||s==='false'||s==='undefined'||s.length<10)return false;
+      return s.startsWith('http');
+    });
     const actDong=parseFloat(row[13])||0;
     const actMat=parseFloat(row[14])||0;
     const actVang=parseFloat(row[15])||0;
@@ -520,7 +525,8 @@ function parseSheetRows(rows){
     const invoiceNote=String(row[19]||'');
     const timestamp=timeStr?new Date(timeStr).getTime():0;
     if(!timestamp)return;
-    const rKey=ROUTE_NAMES[routeKey]?routeKey:'HCM-DN';
+    // Nếu routeKey không hợp lệ thì dùng nguyên giá trị, không fallback 'HCM-DN'
+    const rKey=routeKey||'HCM-DN';
     const rowKey=(groupId||String(timestamp))+'|'+routeKey;
     const trip={id:1,route:rKey,dk,mk,vm,km,channels:{'tong-sheet':{dong:{v:dk,u:'kg'},mat:{v:mk,u:'kg'},vang:{v:vm,u:'m³'},kem:{v:km,u:'m³'}}}};
     const actual=(actDong||actMat||actVang||actKem)?{dong:actDong,mat:actMat,vang:actVang,kem:actKem}:null;
@@ -563,6 +569,8 @@ function parseSheetRows(rows){
   });
   const grouped=Object.values(groups);
   const all=[...grouped,...result].sort((a,b)=>b.timestamp-a.timestamp);
+  console.log('[NL] Groups:',Object.keys(groups).length,'singles:',result.length,'total entries:',all.length);
+  all.forEach(e=>console.log('[NL] Entry:',e.pickDate,e.user,'trips:',e.trips.map(t=>t.route).join(','),'imgs:',e.imgLinks?.length||0));
   return all;
 }
 
@@ -573,23 +581,28 @@ function renderLog(entries){
   const filtered=q?rawEntries.filter(e=>(e.pickDate||'').toLowerCase().includes(q)||(e.note||'').toLowerCase().includes(q)||(e.trips||[]).some(t=>(ROUTE_NAMES[t.route]||'').toLowerCase().includes(q))):rawEntries;
   const cont=$('#logList');
   if(!filtered.length){cont.innerHTML='<div class="log-empty">📂<br>Chưa có nhật ký'+(q?' phù hợp':'')+'</div>';return;}
+  // Store entries by unique key for reliable lookup
+  window._logEntryMap={};
   cont.innerHTML=filtered.map((e,idx)=>{
+    const eKey=e._rowKey||e._groupId||String(e.timestamp||idx);
+    window._logEntryMap[eKey]=e;
     const ts=e.timestamp?new Date(e.timestamp).toLocaleTimeString('vi-VN'):'';
-    const routeCards=(e.trips||[]).map(trip=>buildLogRouteCard(e,idx,trip)).join('');
-    // Ảnh từ Drive: chuyển link xem → link thumbnail
-    function driveThumb(url){
-      const m=url.match(/\/d\/([a-zA-Z0-9_-]+)/);
-      if(m)return `https://drive.google.com/thumbnail?id=${m[1]}&sz=w200`;
-      return url;
-    }
-    const validImgs=(e.imgLinks||[]).filter(s=>s&&typeof s==='string'&&s.startsWith('http'));
-    const imgHtml=validImgs.map(href=>
-      `<a href="${href}" target="_blank" style="display:inline-block;">
-        <img style="width:70px;height:70px;border-radius:8px;object-fit:cover;border:2px solid var(--border);margin:2px;cursor:pointer;background:#f1f5f9;"
-          src="${driveThumb(href)}" loading="lazy"
-          onerror="this.src='${href}';this.onerror=()=>this.parentElement.style.display='none'">
-       </a>`
-    ).join('');
+    const routeCards=(e.trips||[]).map(trip=>buildLogRouteCard(e,eKey,trip)).join('');
+    // Chuyển Drive URL thành thumbnail URL
+    const validImgs=(e.imgLinks||[]).filter(s=>s&&typeof s==='string'&&s.length>10&&s.startsWith('http'));
+    const imgHtml=validImgs.map(href=>{
+      // Trích fileId từ nhiều dạng URL Drive
+      let fileId='';
+      const m1=href.match(/\/d\/([a-zA-Z0-9_-]+)/);
+      const m2=href.match(/id=([a-zA-Z0-9_-]+)/);
+      if(m1)fileId=m1[1]; else if(m2)fileId=m2[1];
+      const thumbSrc=fileId?`https://lh3.googleusercontent.com/d/${fileId}=w200`:href;
+      return `<a href="${href}" target="_blank" style="display:inline-block;">
+        <img style="width:72px;height:72px;border-radius:8px;object-fit:cover;border:2px solid #dbe4ef;margin:2px;cursor:pointer;background:#f1f5f9;"
+          src="${thumbSrc}" loading="lazy"
+          onerror="this.src='https://drive.google.com/thumbnail?id=${fileId}&sz=w200';this.onerror=null;">
+      </a>`;
+    }).join('');
     const isPending=!!e._pending;
     return `<div class="log-group">
       <div class="log-group-date">📅 ${e.pickDate||'---'} · ${ts} · 👤 ${e.user||'---'}${isPending?' <span style="color:#f59e0b;font-size:10px;">⏳ Chờ sync</span>':''}</div>
@@ -600,7 +613,7 @@ function renderLog(entries){
   }).join('');
 }
 
-function buildLogRouteCard(e,eIdx,trip){
+function buildLogRouteCard(e,eKey,trip){
   const rName=ROUTE_NAMES[trip.route]||trip.route;
   // Status từ local meta hoặc từ entry
   // Status: ưu tiên từ Sheet (_status), sau đó local meta
@@ -635,7 +648,7 @@ function buildLogRouteCard(e,eIdx,trip){
   }
 
   // Chi tiết kênh (khi expand)
-  const detailId='det-'+eIdx+'-'+trip.route.replace(/-/g,'_');
+  const detailId='det-'+eKey.replace(/[^a-zA-Z0-9]/g,'_')+'-'+trip.route.replace(/-/g,'_');
   let chDetail='';
   const ch=trip.channels?.['tong-sheet'];
   if(ch){
@@ -693,9 +706,9 @@ function buildLogRouteCard(e,eIdx,trip){
       const diffEl=diff===0?`<span class="lcr-same">= đúng</span>`:diff>0?`<span class="lcr-pos">+${fmtN(diff)}</span>`:`<span class="lcr-neg">${fmtN(diff)}</span>`;
       return `<div class="log-compare-row"><span class="lcr-label">${TYPE_ICO[t]} ${TYPE_LBL[t]}</span><span class="lcr-book">${fmtN(bk)} ${unit}</span><span>→</span><span class="lcr-actual">${fmtN(ac)} ${unit}</span>${diffEl}</div>`;
     }).filter(Boolean).join('');
-    actualHtml=`<div class="log-actual"><div class="log-actual-hdr"><span>📦 SỐ THỰC TẾ</span><button class="log-actual-edit-btn" onclick="openActualEdit(${eIdx},'${trip.route}')">✏️ Cập nhật</button></div>${rows2}</div>`;
+    actualHtml=`<div class="log-actual"><div class="log-actual-hdr"><span>📦 SỐ THỰC TẾ</span><button class="log-actual-edit-btn" onclick="openActualEdit('${eKey}','${trip.route}')">✏️ Cập nhật</button></div>${rows2}</div>`;
   } else {
-    actualHtml=`<div class="log-actual"><div class="log-actual-hdr"><span>📦 SỐ THỰC TẾ</span><button class="log-actual-edit-btn" onclick="openActualEdit(${eIdx},'${trip.route}')">+ Nhập số thực tế</button></div><span class="log-actual-empty">Chưa nhập số thực tế</span></div>`;
+    actualHtml=`<div class="log-actual"><div class="log-actual-hdr"><span>📦 SỐ THỰC TẾ</span><button class="log-actual-edit-btn" onclick="openActualEdit('${eKey}','${trip.route}')">+ Nhập số thực tế</button></div><span class="log-actual-empty">Chưa nhập số thực tế</span></div>`;
   }
 
   return `<div class="log-card ${cardCls}">
@@ -708,12 +721,12 @@ function buildLogRouteCard(e,eIdx,trip){
     <div class="log-ch-detail" id="${detailId}">${chDetail||'<span style="color:var(--muted2);font-size:12px;">Không có dữ liệu kênh</span>'}</div>
     <div class="log-card-body">${totalBox}${actualHtml}</div>
     <div class="log-card-footer">
-      <button class="btn-ls btn-ls-filed ${status==='filed'||status==='paid'?'on':''}" onclick="toggleStatus(${eIdx},'${trip.route}','filed')">📋 Hồ Sơ</button>
-      <button class="btn-ls btn-ls-paid ${status==='paid'?'on':''}" onclick="toggleStatus(${eIdx},'${trip.route}','paid')">✅ TT</button>
+      <button class="btn-ls btn-ls-filed ${status==='filed'||status==='paid'?'on':''}" onclick="toggleStatus('${eKey}','${trip.route}','filed')">📋 Hồ Sơ</button>
+      <button class="btn-ls btn-ls-paid ${status==='paid'?'on':''}" onclick="toggleStatus('${eKey}','${trip.route}','paid')">✅ TT</button>
       <span class="log-ftr-spacer"></span>
-      <button class="btn-ls btn-ls-share" onclick="shareTripLog(${eIdx},'${trip.route}')">💬</button>
-      <button class="btn-ls" style="background:#f1f5f9;border:1.5px solid var(--border2);color:var(--text);" onclick="openInvoiceEdit(${eIdx},'${trip._rowKey||e._rowKey}')">✏️</button>
-      <button class="btn-ls btn-ls-del" onclick="deleteEntry(${eIdx})">🗑️</button>
+      <button class="btn-ls btn-ls-share" onclick="shareTripLog('${eKey}','${trip.route}')">💬</button>
+      <button class="btn-ls" style="background:#f1f5f9;border:1.5px solid var(--border2);color:var(--text);" onclick="openInvoiceEdit('${eKey}')">✏️</button>
+      <button class="btn-ls btn-ls-del" onclick="deleteEntry('${eKey}')">🗑️</button>
     </div>
     ${e.invoiceNote?`<div style="background:#fefce8;border-left:3px solid #f59e0b;padding:6px 12px;font-size:12px;color:#92400e;border-radius:0 0 8px 8px;">📄 Số HD: ${e.invoiceNote}</div>`:''}
   </div>`;
@@ -721,15 +734,15 @@ function buildLogRouteCard(e,eIdx,trip){
 
 function toggleChDetail(id){const el=document.getElementById(id);if(el)el.classList.toggle('open');}
 
-async function toggleStatus(eIdx,routeKey,newStatus){
+async function toggleStatus(eKey,routeKey,newStatus){
   const allEntries=_sheetCache.concat(_pendingLocal);
-  const e=allEntries[eIdx];if(!e)return;
+  const e=(window._logEntryMap||{})[eKey];if(!e)return;
   const cur=e._status||'none';
   const next=cur===newStatus?'none':newStatus;
   e._status=next;
   // Update tất cả trips cùng group
   allEntries.filter(x=>x._groupId&&x._groupId===e._groupId).forEach(x=>x._status=next);
-  renderLog(allEntries);
+  renderLog(_sheetCache.concat(_pendingLocal));
   const st=next;
   showToast(st==='paid'?'✅ Đã thanh toán':st==='filed'?'📋 Đã lập hồ sơ':'↩️ Đã bỏ trạng thái');
   // Sync lên Sheet
@@ -743,10 +756,9 @@ async function toggleStatus(eIdx,routeKey,newStatus){
   }
 }
 
-function deleteEntry(idx){
-  if(!confirm('Xoá mục này (chỉ xoá cục bộ)?'))return;
-  const allEntries=_sheetCache.concat(_pendingLocal);
-  const e=allEntries[idx];
+function deleteEntry(eKey){
+  if(!confirm('Xoá mục này?'))return;
+  const e=(window._logEntryMap||{})[eKey];
   if(!e)return;
   if(e._fromSheet){showToast('⚠️ Không xoá được entry từ Sheet');return;}
   _pendingLocal=_pendingLocal.filter(p=>p!==e);
@@ -755,9 +767,8 @@ function deleteEntry(idx){
   showToast('🗑️ Đã xoá');
 }
 
-function shareTripLog(eIdx,routeKey){
-  const allEntries=_sheetCache.concat(_pendingLocal);
-  const e=allEntries[eIdx];if(!e)return;
+function shareTripLog(eKey,routeKey){
+  const e=(window._logEntryMap||{})[eKey];if(!e)return;
   const trip=(e.trips||[]).find(t=>t.route===routeKey);
   const rName=ROUTE_NAMES[routeKey]||routeKey;
   const lines=[`🚛 NHẤT LÂM BOOK TẢI`,`📅 ${e.pickDate}`,`🗺 ${rName}`,`─────────────────────`];
@@ -774,10 +785,9 @@ function shareTripLog(eIdx,routeKey){
 }
 
 // ══════════════════════ ACTUAL EDIT ══════════════════════
-function openActualEdit(eIdx,routeKey){
-  _actIdx=eIdx;_actRoute=routeKey;
-  const allEntries=_sheetCache.concat(_pendingLocal);
-  const e=allEntries[eIdx];if(!e)return;
+function openActualEdit(eKey,routeKey){
+  _actIdx=eKey;_actRoute=routeKey;
+  const e=(window._logEntryMap||{})[eKey];if(!e)return;
   const trip=(e.trips||[]).find(t=>t.route===routeKey)||{};
   const actual=e['act_'+routeKey]||{};
   const dk=trip.dk||0,mk=trip.mk||0,vm=trip.vm||0,km=trip.km||0;
@@ -798,8 +808,7 @@ function openActualEdit(eIdx,routeKey){
 
 async function saveActualEdit(){
   if(_actIdx<0)return;
-  const allEntries=_sheetCache.concat(_pendingLocal);
-  const e=allEntries[_actIdx];if(!e)return;
+  const e=(window._logEntryMap||{})[_actIdx];if(!e)return;
   const actual={
     dong:parseFloat($('#act-dong')?.value)||0,
     mat:parseFloat($('#act-mat')?.value)||0,
@@ -1072,10 +1081,9 @@ function copyText(){navigator.clipboard.writeText(buildText()).then(()=>showToas
 function shareZalo(){const txt=buildText();if(navigator.share)navigator.share({title:'Nhất Lâm',text:txt});else navigator.clipboard.writeText(txt).then(()=>showToast('✅ Đã copy! Dán vào Zalo.'));}
 
 // ══════════════════════ EDIT LOG (chỉ offline) ══════════════════════
-function openEditLog(eIdx){
-  const allEntries=_sheetCache.concat(_pendingLocal);
-  const e=allEntries[eIdx];if(!e)return;
-  if(e._fromSheet){showToast('ℹ️ Entry từ Sheet, chỉnh sửa tại Sheet');return;}
+function openEditLog(eKey){
+  const e=(window._logEntryMap||{})[eKey];if(!e)return;
+  if(e._fromSheet){showToast('ℹ️ Entry từ Sheet');return;}
   editIndex=eIdx;
   $('#editModalTitle').textContent='✏️ Chỉnh Sửa Nhật Ký';
   $('#editBody').innerHTML=`<div class="grid2" style="margin-bottom:12px"><div><label>📅 Ngày</label><input type="text" id="edit-date" value="${e.pickDate||''}"></div><div><label>📝 Ghi chú</label><input type="text" id="edit-note" value="${e.note||''}"></div></div>`;
@@ -1084,9 +1092,7 @@ function openEditLog(eIdx){
 }
 function saveEditLog(){
   if(editIndex<0)return;
-  const allEntries=_sheetCache.concat(_pendingLocal);
-  const e=allEntries[editIndex];
-  if(!e)return;
+  const e=(window._logEntryMap||{})[editIndex];if(!e)return;
   const pi=_pendingLocal.findIndex(p=>p===e);
   if(pi>=0){_pendingLocal[pi].pickDate=$('#edit-date').value;_pendingLocal[pi].note=$('#edit-note').value;savePending(_pendingLocal);}
   closeEdit();renderLog(allEntries);showToast('✅ Đã lưu');
@@ -1099,10 +1105,9 @@ function closeEdit(){
 }
 
 let _invoiceEIdx=-1,_invoiceRowKey='';
-function openInvoiceEdit(eIdx,rowKey){
-  _invoiceEIdx=eIdx;_invoiceRowKey=rowKey||'';
-  const allEntries=_sheetCache.concat(_pendingLocal);
-  const e=allEntries[eIdx]||{};
+function openInvoiceEdit(eKey){
+  _invoiceEIdx=eKey;_invoiceRowKey='';
+  const e=(window._logEntryMap||{})[eKey]||{};
   $('#editModalTitle').textContent='✏️ Số Hoá Đơn / Ghi Chú HĐ';
   $('#editBody').innerHTML=`
     <div style="margin-bottom:12px;">
@@ -1116,22 +1121,24 @@ function openInvoiceEdit(eIdx,rowKey){
 
 async function saveInvoiceEdit(){
   if(_invoiceEIdx<0)return;
-  const allEntries=_sheetCache.concat(_pendingLocal);
-  const e=allEntries[_invoiceEIdx];if(!e)return;
+  const e=(window._logEntryMap||{})[_invoiceEIdx];if(!e)return;
   const note=$('#invoice-note').value.trim();
   e.invoiceNote=note;
   // Update tất cả trips cùng group
   allEntries.filter(x=>x._groupId&&x._groupId===e._groupId).forEach(x=>x.invoiceNote=note);
   closeEdit();renderLog(allEntries);
   showToast('✅ Đã lưu số hoá đơn');
-  // Sync lên Sheet
+  // Sync lên Sheet - dùng groupId để cập nhật TẤT CẢ dòng của booking
   const s=getSettings();
-  if(s.scriptUrl&&_invoiceRowKey){
+  if(s.scriptUrl){
     try{
-      await fetch(s.scriptUrl,{method:'POST',body:JSON.stringify({
-        action:'updateInvoice',groupId:e._groupId||'',rowKey:_invoiceRowKey,invoiceNote:note
+      const gid=e._groupId||e._rowKey||'';
+      const res=await fetch(s.scriptUrl,{method:'POST',body:JSON.stringify({
+        action:'updateInvoice',groupId:gid,rowKey:e._rowKey||'',invoiceNote:note
       })});
-    }catch(err){}
+      const json=await res.json();
+      if(json.status==='ok') showToast('✅ Đã lưu số HD lên Sheet!');
+    }catch(err){showToast('✅ Đã lưu cục bộ');}
   }
   // Reload để cập nhật từ Sheet
   setTimeout(()=>loadAndRenderLog(),800);
