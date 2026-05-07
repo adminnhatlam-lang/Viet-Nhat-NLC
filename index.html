@@ -450,11 +450,27 @@ async function autoSyncFromSheet(){
     const json=await res.json();
     if(json.status==='ok'&&Array.isArray(json.rows)&&json.rows.length){
       const localLogs=getLogs();let added=0;
-      json.rows.forEach(row=>{
-        const entry=sheetRowToEntry(row);
-        if(!entry)return;
-        const exists=localLogs.some(e=>Math.abs((e.timestamp||0)-entry.timestamp)<60000&&e.user===entry.user&&e.pickDate===entry.pickDate);
-        if(!exists){localLogs.push(entry);added++;}
+      const newEntries=json.rows.map(sheetRowToEntry).filter(Boolean);
+      const merged=mergeSheetEntries(newEntries);
+      const existingKeys=new Set(localLogs.map(e=>e._rowKey||'').filter(Boolean));
+      const existingTS=localLogs.map(e=>e.timestamp||0);
+      merged.forEach(entry=>{
+        // Dedup: theo _rowKey (chính xác) hoặc timestamp+user+pickDate
+        const isDup=entry._rowKey&&existingKeys.has(entry._rowKey);
+        const isTSDup=!entry._rowKey&&existingTS.some(ts=>Math.abs(ts-entry.timestamp)<60000);
+        if(!isDup&&!isTSDup){
+          localLogs.push(entry);added++;
+        } else if(entry._rowKey&&existingKeys.has(entry._rowKey)){
+          // Cập nhật actual nếu có
+          const idx=localLogs.findIndex(e=>e._rowKey===entry._rowKey);
+          if(idx>=0){
+            const rKey=entry.trips[0]?.route;
+            if(rKey&&entry[`act_${rKey}`]){
+              localLogs[idx][`act_${rKey}`]=entry[`act_${rKey}`];
+            }
+            if(entry.imgLinks?.length)localLogs[idx].imgLinks=entry.imgLinks;
+          }
+        }
       });
       localLogs.sort((a,b)=>(b.timestamp||0)-(a.timestamp||0));
       saveLogs(localLogs);renderLog();
@@ -471,43 +487,79 @@ async function autoSyncFromSheet(){
 }
 
 // ✅ Chuyển 1 dòng Sheet thành entry chuẩn (có trips + channels đầy đủ)
+// ✅ Mỗi dòng Sheet = 1 tuyến riêng
+// Cột: [Thời Gian, Ngày Bốc, Tuyến, Người Tạo, Đông(kg), Mát(kg), Váng(m³), Kem(m³), Ghi Chú, Img1, Img2, Img3, Img4, Act_Dong, Act_Mat, Act_Vang, Act_Kem, GroupID]
 function sheetRowToEntry(row){
-  const [timeStr,pickDate,routesStr,user,dong_kg,mat_kg,vang_m3,kem_m3,note,...imgLinks]=row;
+  const timeStr=row[0]||'';
+  const pickDate=row[1]||'';
+  const routeKey=(row[2]||'').trim();
+  const user=row[3]||'';
+  const dk=parseFloat(row[4])||0;
+  const mk=parseFloat(row[5])||0;
+  const vm=parseFloat(row[6])||0;
+  const km=parseFloat(row[7])||0;
+  const note=row[8]||'';
+  const imgLinks=[row[9],row[10],row[11],row[12]].filter(Boolean);
+  const actDong=parseFloat(row[13])||0;
+  const actMat=parseFloat(row[14])||0;
+  const actVang=parseFloat(row[15])||0;
+  const actKem=parseFloat(row[16])||0;
+  const groupId=row[17]||'';
+
   const timestamp=timeStr?new Date(timeStr).getTime():0;
   if(!timestamp)return null;
 
-  const dk=parseFloat(dong_kg)||0;
-  const mk=parseFloat(mat_kg)||0;
-  const vm=parseFloat(vang_m3)||0;
-  const km=parseFloat(kem_m3)||0;
-
-  // Parse nhiều tuyến từ cột Tuyến (vd: "HCM-DN, HCM-HN")
-  const routeKeys=(routesStr||'').split(',').map(r=>r.trim()).filter(r=>ROUTE_NAMES[r]||r);
-  if(!routeKeys.length)routeKeys.push('HCM-DN');
-
-  // Phân bổ đều tổng vào từng tuyến
-  const n=routeKeys.length;
-  const trips=routeKeys.map((rKey,i)=>{
-    const dkPart=Math.round((dk/n)*100)/100;
-    const mkPart=Math.round((mk/n)*100)/100;
-    const vmPart=Math.round((vm/n)*100)/100;
-    const kmPart=Math.round((km/n)*100)/100;
-    // Ghi tổng vào channel đại diện "tong-sheet" để hiển thị
-    const ch={'tong-sheet':{
-      dong:{v:dkPart,u:'kg'},
-      mat:{v:mkPart,u:'kg'},
-      vang:{v:vmPart,u:'m³'},
-      kem:{v:kmPart,u:'m³'}
-    }};
-    return {id:i+1,route:rKey,channels:ch};
-  });
-
-  return{
-    pickDate:pickDate||'',user:user||'',note:note||'',timestamp,
+  const rKey=ROUTE_NAMES[routeKey]?routeKey:'HCM-DN';
+  const ch={'tong-sheet':{
+    dong:{v:dk,u:'kg'},mat:{v:mk,u:'kg'},
+    vang:{v:vm,u:'m³'},kem:{v:km,u:'m³'}
+  }};
+  const trip={id:1,route:rKey,channels:ch};
+  const entry={
+    pickDate,user,note,timestamp,
     dk,mk,vm,km,
-    imgLinks:imgLinks.filter(Boolean),images:[],
-    trips,_fromSheet:true
+    imgLinks,images:[],
+    trips:[trip],
+    _fromSheet:true,
+    _groupId:groupId,
+    _rowKey:timeStr+'|'+routeKey
   };
+  if(actDong||actMat||actVang||actKem){
+    entry[`act_${rKey}`]={dong:actDong,mat:actMat,vang:actVang,kem:actKem};
+  }
+  return entry;
+}
+
+// Gộp các dòng Sheet có cùng groupId thành 1 entry (nhiều tuyến)
+function mergeSheetEntries(entries){
+  const groups={};
+  const singles=[];
+  entries.forEach(e=>{
+    if(e._groupId){
+      if(!groups[e._groupId]){
+        groups[e._groupId]={...e,trips:[...e.trips]};
+      } else {
+        const g=groups[e._groupId];
+        // Thêm tuyến vào group
+        const trip=e.trips[0];
+        if(!g.trips.find(t=>t.route===trip.route)){
+          g.trips.push(trip);
+        }
+        // Merge actual
+        const rKey=trip.route;
+        if(e[`act_${rKey}`])g[`act_${rKey}`]=e[`act_${rKey}`];
+        // Merge imgLinks
+        g.imgLinks=[...new Set([...(g.imgLinks||[]),...(e.imgLinks||[])])].filter(Boolean);
+        // Cộng tổng
+        g.dk+=e.dk;g.mk+=e.mk;g.vm+=e.vm;g.km+=e.km;
+        // Merge note
+        if(e.note&&!g.note)g.note=e.note;
+      }
+    } else {
+      singles.push(e);
+    }
+  });
+  return [...Object.values(groups),...singles];
 }
 
 // ══════════════════════ TRIP BOARDS ══════════════════════
@@ -897,11 +949,21 @@ async function syncFromSheet(){
     const json=await res.json();
     if(json.status==='ok'&&Array.isArray(json.rows)&&json.rows.length){
       const localLogs=getLogs();let added=0;
-      json.rows.forEach(row=>{
-        const entry=sheetRowToEntry(row);
-        if(!entry)return;
-        const exists=localLogs.some(e=>Math.abs((e.timestamp||0)-entry.timestamp)<60000&&e.user===entry.user&&e.pickDate===entry.pickDate);
-        if(!exists){localLogs.push(entry);added++;}
+      const newEntries=json.rows.map(sheetRowToEntry).filter(Boolean);
+      const merged=mergeSheetEntries(newEntries);
+      const existingKeys=new Set(localLogs.map(e=>e._rowKey||'').filter(Boolean));
+      merged.forEach(entry=>{
+        const isDup=entry._rowKey&&existingKeys.has(entry._rowKey);
+        const isTSDup=!entry._rowKey&&localLogs.some(e=>Math.abs((e.timestamp||0)-entry.timestamp)<60000&&e.user===entry.user);
+        if(!isDup&&!isTSDup){localLogs.push(entry);added++;}
+        else if(entry._rowKey&&existingKeys.has(entry._rowKey)){
+          const idx=localLogs.findIndex(e=>e._rowKey===entry._rowKey);
+          if(idx>=0){
+            const rKey=entry.trips[0]?.route;
+            if(rKey&&entry[`act_${rKey}`])localLogs[idx][`act_${rKey}`]=entry[`act_${rKey}`];
+            if(entry.imgLinks?.length)localLogs[idx].imgLinks=entry.imgLinks;
+          }
+        }
       });
       localLogs.sort((a,b)=>(b.timestamp||0)-(a.timestamp||0));
       saveLogs(localLogs);renderLog();
@@ -934,10 +996,11 @@ function renderLog(){
     const realIdx=logs.indexOf(e);
     const ts=e.timestamp?new Date(e.timestamp).toLocaleTimeString('vi-VN'):'';
     const routeCards=(e.trips||[]).map(trip=>buildLogRouteCard(e,realIdx,trip)).join('');
-    const imgHtml=(e.images||[]).map((img,ii)=>{
-      const src=img.data||e.imgLinks?.[ii]||'';
-      return src?`<img class="log-img-thumb" style="width:52px;height:52px;border-radius:6px;object-fit:cover;border:1.5px solid var(--border);cursor:pointer;margin:2px;" src="${src}" onclick="window.open('${e.imgLinks?.[ii]||src}','_blank')">`:'' ;
-    }).join('');
+    // ✅ Hiển thị ảnh từ imgLinks (link Drive) HOẶC images[] (base64 cục bộ)
+    const allImgSrcs=[];
+    (e.imgLinks||[]).forEach(lnk=>{if(lnk)allImgSrcs.push({src:lnk,href:lnk});});
+    if(!allImgSrcs.length)(e.images||[]).forEach(img=>{if(img?.data)allImgSrcs.push({src:img.data,href:img.data});});
+    const imgHtml=allImgSrcs.map(({src,href})=>`<img class="log-img-thumb" style="width:60px;height:60px;border-radius:6px;object-fit:cover;border:1.5px solid var(--border);cursor:pointer;margin:2px;" src="${href}" onerror="this.style.display='none'" onclick="window.open('${href}','_blank')">`).join('');
     return `<div class="log-group">
       <div class="log-group-date">📅 ${e.pickDate||'---'} · ${ts} · 👤 ${e.user||'---'}</div>
       ${routeCards}
@@ -1000,18 +1063,25 @@ function buildLogRouteCard(e,eIdx,trip){
   const kemKg=km*M3_TO_KG;
   const tongKg=dk+mk+vangKg+kemKg;
 
+  // Nếu đã nhập thực tế → dùng số thực tế cho pill tổng
+  const actual=e[`act_${trip.route}`]||{};
+  const hasActual=actual.dong||actual.mat||actual.vang||actual.kem;
+  const disDk=hasActual?(actual.dong||dk):dk;
+  const disMk=hasActual?(actual.mat||mk):mk;
+  const disVm=hasActual?(actual.vang||vm):vm;
+  const disKm=hasActual?(actual.kem||km):km;
+  const disTongKg=disDk+disMk+(disVm*M3_TO_KG)+(disKm*M3_TO_KG);
+
   const hdrPills=[];
-  if(dk>0)hdrPills.push(`<span class="log-total-pill ltp-dong">❄️ ${fmtN(dk)} kg</span>`);
-  if(mk>0)hdrPills.push(`<span class="log-total-pill ltp-mat">🌡 ${fmtN(mk)} kg</span>`);
-  if(vm>0)hdrPills.push(`<span class="log-total-pill ltp-vang">🍦 ${fmtN(vm)} m³</span>`);
-  if(km>0)hdrPills.push(`<span class="log-total-pill ltp-kem">🍨 ${fmtN(km)} m³</span>`);
-  if(tongKg>0&&(vm>0||km>0)){
-    hdrPills.push(`<span class="log-total-pill" style="background:#1e3a5f;color:#f59e0b;border:1px solid rgba(245,158,11,.4);font-size:10px;" title="Tổng quy đổi: Đông+Mát + Váng×333 + Kem×333">📊 ${fmtN(Math.round(tongKg))} kg</span>`);
+  if(disDk>0)hdrPills.push(`<span class="log-total-pill ltp-dong">❄️ ${fmtN(disDk)} kg${hasActual&&actual.dong?'*':''}</span>`);
+  if(disMk>0)hdrPills.push(`<span class="log-total-pill ltp-mat">🌡 ${fmtN(disMk)} kg${hasActual&&actual.mat?'*':''}</span>`);
+  if(disVm>0)hdrPills.push(`<span class="log-total-pill ltp-vang">🍦 ${fmtN(disVm)} m³${hasActual&&actual.vang?'*':''}</span>`);
+  if(disKm>0)hdrPills.push(`<span class="log-total-pill ltp-kem">🍨 ${fmtN(disKm)} m³${hasActual&&actual.kem?'*':''}</span>`);
+  if(disTongKg>0&&(disVm>0||disKm>0)){
+    hdrPills.push(`<span class="log-total-pill" style="background:#1e3a5f;color:#f59e0b;border:1px solid rgba(245,158,11,.4);font-size:10px;" title="Tổng quy đổi${hasActual?' (thực tế)':' (đặt)'}">📊 ${fmtN(Math.round(disTongKg))} kg${hasActual?'*':''}</span>`);
   }
 
-  // actual comparison
-  const actual=e[`act_${trip.route}`]||{};
-  const hasActual=Object.values(actual).some(v=>v>0);
+  // actual comparison (actual/hasActual already computed above)
   let actualHtml='';
   if(hasActual){
     const rows=TYPES.map(t=>{
@@ -1029,17 +1099,26 @@ function buildLogRouteCard(e,eIdx,trip){
   }
 
   // Tổng quy đổi summary box
+  // Tổng quy đổi: dùng thực tế nếu đã nhập
   let totalSummaryHtml='';
-  if(tongKg>0&&(vm>0||km>0)){
+  const showDk=hasActual?(actual.dong||dk):dk;
+  const showMk=hasActual?(actual.mat||mk):mk;
+  const showVm=hasActual?(actual.vang||vm):vm;
+  const showKm=hasActual?(actual.kem||km):km;
+  const showVangKg=showVm*M3_TO_KG;
+  const showKemKg=showKm*M3_TO_KG;
+  const showTong=showDk+showMk+showVangKg+showKemKg;
+  if(showTong>0&&(showVm>0||showKm>0)){
+    const label=hasActual?'📊 TỔNG THỰC TẾ':'📊 TỔNG QUY ĐỔI';
     const parts=[];
-    if(dk>0)parts.push(`❄️ ${fmtN(dk)}`);
-    if(mk>0)parts.push(`🌡 ${fmtN(mk)}`);
-    if(vm>0)parts.push(`🍦 ${fmtN(vm)}m³×333=${fmtN(Math.round(vangKg))}`);
-    if(km>0)parts.push(`🍨 ${fmtN(km)}m³×333=${fmtN(Math.round(kemKg))}`);
+    if(showDk>0)parts.push(`❄️ ${fmtN(showDk)}`);
+    if(showMk>0)parts.push(`🌡 ${fmtN(showMk)}`);
+    if(showVm>0)parts.push(`🍦 ${fmtN(showVm)}m³×333=${fmtN(Math.round(showVangKg))}`);
+    if(showKm>0)parts.push(`🍨 ${fmtN(showKm)}m³×333=${fmtN(Math.round(showKemKg))}`);
     totalSummaryHtml=`<div style="background:linear-gradient(135deg,#1e3a5f,#1e4976);border-radius:8px;padding:8px 12px;margin-top:8px;display:flex;align-items:center;flex-wrap:wrap;gap:6px;">
-      <span style="font-size:10px;letter-spacing:1.5px;color:#94a3b8;font-weight:700;flex-shrink:0;">📊 TỔNG QUY ĐỔI</span>
+      <span style="font-size:10px;letter-spacing:1.5px;color:#94a3b8;font-weight:700;flex-shrink:0;">${label}</span>
       <span style="font-size:10px;color:#cbd5e1;flex:1;">${parts.join(' + ')} kg</span>
-      <span style="font-size:14px;font-weight:800;color:#f59e0b;">${fmtN(Math.round(tongKg))} kg</span>
+      <span style="font-size:14px;font-weight:800;color:#f59e0b;">${fmtN(Math.round(showTong))} kg</span>
     </div>`;
   }
 
@@ -1098,7 +1177,15 @@ function openActualEdit(eIdx,routeKey){
   const trip=(e.trips||[]).find(t=>t.route===routeKey)||{};
   const actual=e[`act_${routeKey}`]||{};
   let dk=0,mk=0,vm=0,km=0;
-  CHS.forEach(ch=>{const cd=trip.channels?.[ch.id]||{};dk+=toKg(cd.dong?.v||0,cd.dong?.u||'kg');mk+=toKg(cd.mat?.v||0,cd.mat?.u||'kg');vm+=cd.vang?.v||0;km+=cd.kem?.v||0;});
+  // _fromSheet entries use tong-sheet channel
+  if(trip.channels&&trip.channels['tong-sheet']){
+    const cd=trip.channels['tong-sheet'];
+    dk=toKg(cd.dong?.v||0,cd.dong?.u||'kg');
+    mk=toKg(cd.mat?.v||0,cd.mat?.u||'kg');
+    vm=cd.vang?.v||0;km=cd.kem?.v||0;
+  } else {
+    CHS.forEach(ch=>{const cd=trip.channels?.[ch.id]||{};dk+=toKg(cd.dong?.v||0,cd.dong?.u||'kg');mk+=toKg(cd.mat?.v||0,cd.mat?.u||'kg');vm+=cd.vang?.v||0;km+=cd.kem?.v||0;});
+  }
   const booked={dong:dk,mat:mk,vang:vm,kem:km};
   const rName=ROUTE_NAMES[routeKey]||routeKey;
   const rows=TYPES.map(t=>`<div class="edit-cargo-row">
@@ -1111,11 +1198,29 @@ function openActualEdit(eIdx,routeKey){
   $('#saveEditBtn').onclick=saveActualEdit;
   $('#editModal').classList.add('open');
 }
-function saveActualEdit(){
+async function saveActualEdit(){
   if(_actIdx<0)return;
   const logs=getLogs();
-  logs[_actIdx][`act_${_actRoute}`]={dong:parseFloat($('#act-dong')?.value)||0,mat:parseFloat($('#act-mat')?.value)||0,vang:parseFloat($('#act-vang')?.value)||0,kem:parseFloat($('#act-kem')?.value)||0};
+  const actual={
+    dong:parseFloat($('#act-dong')?.value)||0,
+    mat:parseFloat($('#act-mat')?.value)||0,
+    vang:parseFloat($('#act-vang')?.value)||0,
+    kem:parseFloat($('#act-kem')?.value)||0
+  };
+  logs[_actIdx][`act_${_actRoute}`]=actual;
   saveLogs(logs);closeEdit();renderLog();showToast('✅ Đã lưu số thực tế');
+  // Đồng bộ actual lên Sheet
+  const s=getSettings();
+  if(s.scriptUrl&&logs[_actIdx]._rowKey){
+    try{
+      const payload={
+        action:'updateActual',rowKey:logs[_actIdx]._rowKey,
+        route:_actRoute,act_dong:actual.dong,act_mat:actual.mat,
+        act_vang:actual.vang,act_kem:actual.kem
+      };
+      fetch(s.scriptUrl,{method:'POST',body:JSON.stringify(payload)}).catch(()=>{});
+    }catch(e){}
+  }
 }
 
 // ══════════════════════ EDIT LOG ══════════════════════
