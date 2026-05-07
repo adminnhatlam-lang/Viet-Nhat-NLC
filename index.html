@@ -442,35 +442,24 @@ function switchTab(name,btn){
 // Tự động đồng bộ từ Sheet khi vào tab (không hiển thị lỗi nếu chưa cài URL)
 async function autoSyncFromSheet(){
   const s=getSettings();
-  if(!s.scriptUrl)return; // chưa cài → bỏ qua
+  if(!s.scriptUrl)return;
   const status=document.getElementById('syncStatus');
-  if(status){status.style.display='block';status.textContent='☁️ Đang tự động đồng bộ từ Sheet...';}
+  if(status){status.style.display='block';status.textContent='☁️ Đang đồng bộ từ Sheet...';}
   try{
     const res=await fetch(s.scriptUrl+'?action=getLogs&limit=200',{method:'GET'});
     const json=await res.json();
     if(json.status==='ok'&&Array.isArray(json.rows)&&json.rows.length){
       const localLogs=getLogs();let added=0;
       json.rows.forEach(row=>{
-        const [timeStr,pickDate,routes,user,dong_kg,mat_kg,vang_m3,kem_m3,note,...imgLinks]=row;
-        const timestamp=timeStr?new Date(timeStr).getTime():0;
-        if(!timestamp)return;
-        const exists=localLogs.some(e=>Math.abs((e.timestamp||0)-timestamp)<60000&&e.user===user&&e.pickDate===pickDate);
-        if(!exists){
-          localLogs.push({
-            pickDate,user,note:note||'',timestamp,
-            dk:parseFloat(dong_kg)||0,mk:parseFloat(mat_kg)||0,
-            vm:parseFloat(vang_m3)||0,km:parseFloat(kem_m3)||0,
-            imgLinks:imgLinks.filter(Boolean),images:[],
-            trips:[{id:1,route:(routes||'HCM-DN').split(',')[0].trim(),channels:{}}],
-            _fromSheet:true
-          });
-          added++;
-        }
+        const entry=sheetRowToEntry(row);
+        if(!entry)return;
+        const exists=localLogs.some(e=>Math.abs((e.timestamp||0)-entry.timestamp)<60000&&e.user===entry.user&&e.pickDate===entry.pickDate);
+        if(!exists){localLogs.push(entry);added++;}
       });
       localLogs.sort((a,b)=>(b.timestamp||0)-(a.timestamp||0));
       saveLogs(localLogs);renderLog();
       if(status){
-        status.textContent=added>0?`✅ Đã đồng bộ ${added} mục mới từ Sheet`:'✅ Dữ liệu đã cập nhật';
+        status.textContent=added>0?`✅ Đồng bộ ${added} mục mới từ Sheet`:'✅ Dữ liệu đã cập nhật';
         setTimeout(()=>{status.style.display='none';},3000);
       }
     }else{
@@ -479,6 +468,46 @@ async function autoSyncFromSheet(){
   }catch(err){
     if(status){status.textContent='⚠️ Không kết nối được Sheet';setTimeout(()=>{status.style.display='none';},3000);}
   }
+}
+
+// ✅ Chuyển 1 dòng Sheet thành entry chuẩn (có trips + channels đầy đủ)
+function sheetRowToEntry(row){
+  const [timeStr,pickDate,routesStr,user,dong_kg,mat_kg,vang_m3,kem_m3,note,...imgLinks]=row;
+  const timestamp=timeStr?new Date(timeStr).getTime():0;
+  if(!timestamp)return null;
+
+  const dk=parseFloat(dong_kg)||0;
+  const mk=parseFloat(mat_kg)||0;
+  const vm=parseFloat(vang_m3)||0;
+  const km=parseFloat(kem_m3)||0;
+
+  // Parse nhiều tuyến từ cột Tuyến (vd: "HCM-DN, HCM-HN")
+  const routeKeys=(routesStr||'').split(',').map(r=>r.trim()).filter(r=>ROUTE_NAMES[r]||r);
+  if(!routeKeys.length)routeKeys.push('HCM-DN');
+
+  // Phân bổ đều tổng vào từng tuyến
+  const n=routeKeys.length;
+  const trips=routeKeys.map((rKey,i)=>{
+    const dkPart=Math.round((dk/n)*100)/100;
+    const mkPart=Math.round((mk/n)*100)/100;
+    const vmPart=Math.round((vm/n)*100)/100;
+    const kmPart=Math.round((km/n)*100)/100;
+    // Ghi tổng vào channel đại diện "tong-sheet" để hiển thị
+    const ch={'tong-sheet':{
+      dong:{v:dkPart,u:'kg'},
+      mat:{v:mkPart,u:'kg'},
+      vang:{v:vmPart,u:'m³'},
+      kem:{v:kmPart,u:'m³'}
+    }};
+    return {id:i+1,route:rKey,channels:ch};
+  });
+
+  return{
+    pickDate:pickDate||'',user:user||'',note:note||'',timestamp,
+    dk,mk,vm,km,
+    imgLinks:imgLinks.filter(Boolean),images:[],
+    trips,_fromSheet:true
+  };
 }
 
 // ══════════════════════ TRIP BOARDS ══════════════════════
@@ -825,45 +854,18 @@ async function syncFromSheet(){
   btn.textContent='⏳ Đang tải...';btn.disabled=true;
   status.style.display='block';status.textContent='☁️ Đang tải dữ liệu từ Google Sheet...';
   try{
-    // GET request returns sheet rows as JSON
     const res=await fetch(s.scriptUrl+'?action=getLogs&limit=200',{method:'GET'});
     const json=await res.json();
     if(json.status==='ok'&&Array.isArray(json.rows)&&json.rows.length){
-      // Merge: sheet rows → convert to log entry format → add to local if not exist
-      const localLogs=getLogs();
-      let added=0;
+      const localLogs=getLogs();let added=0;
       json.rows.forEach(row=>{
-        // row: [Thời Gian, Ngày Bốc, Tuyến, Người Tạo, Đông(kg), Mát(kg), Váng(m³), Kem(m³), Ghi Chú, Ảnh1..4]
-        const [timeStr,pickDate,routes,user,dong_kg,mat_kg,vang_m3,kem_m3,note,...imgLinks]=row;
-        const timestamp=new Date(timeStr).getTime()||Date.now();
-        // Check duplicate by timestamp
-        const exists=localLogs.some(e=>Math.abs((e.timestamp||0)-timestamp)<60000&&e.user===user);
-        if(!exists){
-          const synced={
-            pickDate:pickDate||'',
-            user:user||'',
-            note:note||'',
-            timestamp:timestamp,
-            dk:parseFloat(dong_kg)||0,
-            mk:parseFloat(mat_kg)||0,
-            vm:parseFloat(vang_m3)||0,
-            km:parseFloat(kem_m3)||0,
-            imgLinks:imgLinks.filter(Boolean),
-            images:[],
-            trips:[{
-              id:1,route:routes||'HCM-DN',
-              channels:{},
-            }],
-            _fromSheet:true
-          };
-          localLogs.push(synced);
-          added++;
-        }
+        const entry=sheetRowToEntry(row);
+        if(!entry)return;
+        const exists=localLogs.some(e=>Math.abs((e.timestamp||0)-entry.timestamp)<60000&&e.user===entry.user&&e.pickDate===entry.pickDate);
+        if(!exists){localLogs.push(entry);added++;}
       });
-      // Sort by timestamp desc
       localLogs.sort((a,b)=>(b.timestamp||0)-(a.timestamp||0));
-      saveLogs(localLogs);
-      renderLog();
+      saveLogs(localLogs);renderLog();
       const msg=added>0?`✅ Đã đồng bộ ${added} mục mới từ Sheet!`:'✅ Dữ liệu đã cập nhật, không có mục mới.';
       status.textContent=msg;showToast(msg);
     }else if(json.status==='ok'){
@@ -914,8 +916,44 @@ function buildLogRouteCard(e,eIdx,trip){
   const cardCls=status==='paid'?'status-paid':status==='filed'?'status-filed':'';
 
   // subtotals for header
+  // ✅ Với entry từ Sheet (_fromSheet): lấy số từ channel tong-sheet hoặc dk/mk/vm/km trực tiếp
   let dk=0,mk=0,vm=0,km=0;
-  CHS.forEach(ch=>{const cd=trip.channels[ch.id]||{};dk+=toKg(cd.dong?.v||0,cd.dong?.u||'kg');mk+=toKg(cd.mat?.v||0,cd.mat?.u||'kg');vm+=cd.vang?.v||0;km+=cd.kem?.v||0;});
+  const allChKeys=Object.keys(trip.channels||{});
+  if(allChKeys.includes('tong-sheet')){
+    // Entry đồng bộ từ Sheet → dùng trực tiếp từ channel tổng
+    const cd=trip.channels['tong-sheet'];
+    dk=toKg(cd.dong?.v||0,cd.dong?.u||'kg');
+    mk=toKg(cd.mat?.v||0,cd.mat?.u||'kg');
+    vm=cd.vang?.v||0;
+    km=cd.kem?.v||0;
+  } else {
+    // Entry từ Book Tải cục bộ → tính từ tất cả kênh
+    CHS.forEach(ch=>{const cd=trip.channels[ch.id]||{};dk+=toKg(cd.dong?.v||0,cd.dong?.u||'kg');mk+=toKg(cd.mat?.v||0,cd.mat?.u||'kg');vm+=cd.vang?.v||0;km+=cd.kem?.v||0;});
+  }
+
+  // channel detail (collapse)
+  const detailId=`det-${eIdx}-${trip.route.replace(/-/g,'_')}`;
+  let chDetail='';
+  if(allChKeys.includes('tong-sheet')){
+    // Entry từ Sheet: hiển thị 1 dòng tổng hợp thay vì từng kênh
+    chDetail=`<div class="log-ch-row-detail" style="background:#fffbeb;border-radius:6px;padding:5px 8px;">
+      <div class="log-ch-name-d" style="color:#92400e;font-weight:700;">📊 Số liệu từ Sheet</div>
+      <div class="log-ch-pills-d">
+        ${dk>0?`<span class="scp scp-dong">❄️ Đông: ${fmtN(dk)} kg</span>`:''}
+        ${mk>0?`<span class="scp scp-mat">🌡 Mát: ${fmtN(mk)} kg</span>`:''}
+        ${vm>0?`<span class="scp scp-vang">🍦 Váng: ${fmtN(vm)} m³</span>`:''}
+        ${km>0?`<span class="scp scp-kem">🍨 Kem: ${fmtN(km)} m³</span>`:''}
+      </div>
+    </div>`;
+  } else {
+    CHS.forEach(ch=>{
+      const cd=trip.channels[ch.id]||{};
+      const pills=[];
+      TYPES.forEach(t=>{if(cd[t]&&cd[t].v>0)pills.push(`<span class="scp scp-${t}">${TYPE_ICO[t]} ${TYPE_LBL[t]}: ${fmtN(cd[t].v)} ${cd[t].u}</span>`);});
+      if(!pills.length)return;
+      chDetail+=`<div class="log-ch-row-detail"><div class="log-ch-name-d">${ch.icon} ${ch.name}</div><div class="log-ch-pills-d">${pills.join('')}</div></div>`;
+    });
+  }
 
   // Quy đổi: 1 m³ = 333 kg
   const M3_TO_KG=333;
@@ -928,21 +966,9 @@ function buildLogRouteCard(e,eIdx,trip){
   if(mk>0)hdrPills.push(`<span class="log-total-pill ltp-mat">🌡 ${fmtN(mk)} kg</span>`);
   if(vm>0)hdrPills.push(`<span class="log-total-pill ltp-vang">🍦 ${fmtN(vm)} m³</span>`);
   if(km>0)hdrPills.push(`<span class="log-total-pill ltp-kem">🍨 ${fmtN(km)} m³</span>`);
-  // Pill tổng quy đổi (chỉ hiện khi có ít nhất 2 loại hoặc có m³)
   if(tongKg>0&&(vm>0||km>0)){
     hdrPills.push(`<span class="log-total-pill" style="background:#1e3a5f;color:#f59e0b;border:1px solid rgba(245,158,11,.4);font-size:10px;" title="Tổng quy đổi: Đông+Mát + Váng×333 + Kem×333">📊 ${fmtN(Math.round(tongKg))} kg</span>`);
   }
-
-  // channel detail (hidden by default, toggle on click)
-  const detailId=`det-${eIdx}-${trip.route.replace('-','_')}`;
-  let chDetail='';
-  CHS.forEach(ch=>{
-    const cd=trip.channels[ch.id]||{};
-    const pills=[];
-    TYPES.forEach(t=>{if(cd[t]&&cd[t].v>0)pills.push(`<span class="scp scp-${t}">${TYPE_ICO[t]} ${TYPE_LBL[t]}: ${fmtN(cd[t].v)} ${cd[t].u}</span>`);} );
-    if(!pills.length)return;
-    chDetail+=`<div class="log-ch-row-detail"><div class="log-ch-name-d">${ch.icon} ${ch.name}</div><div class="log-ch-pills-d">${pills.join('')}</div></div>`;
-  });
 
   // actual comparison
   const actual=e[`act_${trip.route}`]||{};
