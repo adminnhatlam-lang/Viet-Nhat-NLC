@@ -398,7 +398,7 @@ const M3_TO_KG=333;
 
 // ══════════════════════ STORAGE (Settings chỉ) ══════════════════════
 let imgFiles=[],trips=[],tripCounter=0,currentEntry=null,editIndex=-1;
-let _actIdx=-1,_actRoute='',_actTripRowKey='';
+let _actIdx=-1,_actRoute='',_actTripRowKey='',_currentSaveAction='';
 
 // Sheet là nguồn sự thật duy nhất → cache tạm thời
 let _sheetCache=[];    // dữ liệu từ Sheet
@@ -435,6 +435,12 @@ window.addEventListener('DOMContentLoaded',()=>{
   _pendingLocal=getPending();
   addTrip();
   if(/Android|iPhone|iPad/i.test(navigator.userAgent))$('#btnPrint').style.display='none';
+  // 1 handler duy nhất cho nút Lưu - không bị cloneNode phá
+  document.getElementById('saveEditBtn').addEventListener('click', function(){
+    if(_currentSaveAction==='actual') saveActualEdit();
+    else if(_currentSaveAction==='invoice') saveInvoiceEdit();
+    else if(_currentSaveAction==='editlog') saveEditLog();
+  });
 });
 
 const fmtN=n=>n===0?'0':(n%1===0?n.toLocaleString('vi-VN'):n.toLocaleString('vi-VN',{maximumFractionDigits:2}));
@@ -759,15 +765,17 @@ async function toggleStatus(eKey,routeKey,newStatus){
   const isPaid=!!(e['_paid_'+routeKey]);
   const statusStr=isPaid?'paid':isFiled?'filed':'none';
   showToast(statusStr==='paid'?'✅ Đã thanh toán':statusStr==='filed'?'📋 Đã lập hồ sơ':'↩️ Đã bỏ trạng thái');
-  // Sync lên Sheet - tìm rowKey của tuyến cụ thể
+  // Sync lên Sheet - chỉ ghi đúng dòng của tuyến này (theo rowKey)
   const s=getSettings();
   if(s.scriptUrl){
     const trip=(e.trips||[]).find(t=>t.route===routeKey);
     const rk=trip?._rowKey||e._rowKey;
     if(rk){
       try{
+        // Gửi rowKey cụ thể của tuyến này, KHÔNG dùng groupId
+        // GAS sẽ chỉ cập nhật đúng 1 dòng
         await fetch(s.scriptUrl,{method:'POST',body:JSON.stringify({
-          action:'updateStatus',groupId:e._groupId||'',rowKey:rk,status:statusStr
+          action:'updateStatus',rowKey:rk,groupId:'',status:statusStr
         })});
       }catch(err){}
     }
@@ -820,15 +828,13 @@ function openActualEdit(eKey,routeKey){
   </div>`).join('');
   $('#editModalTitle').textContent=`📦 Số thực tế – ${rName}`;
   $('#editBody').innerHTML=`<div style="background:#f0f6ff;border-radius:8px;padding:10px;font-size:12px;color:#1e4976;margin-bottom:12px;">Nhập số <strong>thực tế</strong> sau khi bốc hàng. Để trống = giữ số đặt.</div>${rows}`;
-  const btn=$('#saveEditBtn');
-  btn.replaceWith(btn.cloneNode(true)); // xóa listener cũ
-  $('#saveEditBtn').addEventListener('click', saveActualEdit);
+  _currentSaveAction='actual';
   $('#editModal').classList.add('open');
 }
 
 async function saveActualEdit(){
-  if(_actIdx<0)return;
-  const e=(window._logEntryMap||{})[_actIdx];if(!e)return;
+  const e=(window._logEntryMap||{})[_actIdx||''];
+  if(!e){closeEdit();return;}
   const actual={
     dong:parseFloat($('#act-dong')?.value)||0,
     mat:parseFloat($('#act-mat')?.value)||0,
@@ -862,7 +868,7 @@ async function saveActualEdit(){
     showToast('✅ Đã lưu số thực tế');
   }
   closeEdit();
-  renderLog(allEntries);
+  renderLog(_sheetCache.concat(_pendingLocal));
 }
 
 // ══════════════════════ TRIP BOARDS ══════════════════════
@@ -1107,9 +1113,7 @@ function openEditLog(eKey){
   editIndex=eIdx;
   $('#editModalTitle').textContent='✏️ Chỉnh Sửa Nhật Ký';
   $('#editBody').innerHTML=`<div class="grid2" style="margin-bottom:12px"><div><label>📅 Ngày</label><input type="text" id="edit-date" value="${e.pickDate||''}"></div><div><label>📝 Ghi chú</label><input type="text" id="edit-note" value="${e.note||''}"></div></div>`;
-  const btnEdit=$('#saveEditBtn');
-  btnEdit.replaceWith(btnEdit.cloneNode(true));
-  $('#saveEditBtn').addEventListener('click', saveEditLog);
+  _currentSaveAction='editlog';
   $('#editModal').classList.add('open');
 }
 function saveEditLog(){
@@ -1121,8 +1125,9 @@ function saveEditLog(){
 }
 function closeEdit(){
   $('#editModal').classList.remove('open');
-  editIndex=-1;_actIdx=-1;_actRoute='';_invoiceRowKey='';
+  editIndex=-1;_actIdx='';_actRoute='';_invoiceRowKey='';_invoiceEIdx='';_currentSaveAction='';
   $('#editModalTitle').textContent='✏️ Chỉnh Sửa';
+  $('#editBody').innerHTML='';
 }
 
 let _invoiceEIdx=-1,_invoiceRowKey='';
@@ -1136,20 +1141,19 @@ function openInvoiceEdit(eKey){
       <input type="text" id="invoice-note" placeholder="VD: HD001, TT ngày 08/05..." value="${e.invoiceNote||''}"
         style="width:100%;padding:10px;border:1.5px solid var(--border);border-radius:8px;font-size:14px;font-family:'Be Vietnam Pro',sans-serif;">
     </div>`;
-  const btnInv=$('#saveEditBtn');
-  btnInv.replaceWith(btnInv.cloneNode(true));
-  $('#saveEditBtn').addEventListener('click', saveInvoiceEdit);
+  _currentSaveAction='invoice';
   $('#editModal').classList.add('open');
 }
 
 async function saveInvoiceEdit(){
-  if(_invoiceEIdx<0)return;
-  const e=(window._logEntryMap||{})[_invoiceEIdx];if(!e)return;
-  const note=$('#invoice-note').value.trim();
+  const e=(window._logEntryMap||{})[_invoiceEIdx||''];
+  if(!e){closeEdit();return;}
+  const note=$('#invoice-note')?.value?.trim()||'';
   e.invoiceNote=note;
-  // Update tất cả trips cùng group
-  allEntries.filter(x=>x._groupId&&x._groupId===e._groupId).forEach(x=>x.invoiceNote=note);
-  closeEdit();renderLog(allEntries);
+  // Update tất cả entries cùng group
+  const allE=_sheetCache.concat(_pendingLocal);
+  allE.filter(x=>x._groupId&&x._groupId===e._groupId).forEach(x=>x.invoiceNote=note);
+  closeEdit();renderLog(allE);
   showToast('✅ Đã lưu số hoá đơn');
   // Sync lên Sheet - dùng groupId để cập nhật TẤT CẢ dòng của booking
   const s=getSettings();
