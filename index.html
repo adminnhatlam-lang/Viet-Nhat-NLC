@@ -309,8 +309,10 @@ textarea{resize:vertical;min-height:52px;}
   <div class="step">
     <div class="log-toolbar">
       <input class="log-search" type="text" placeholder="🔍 Tìm theo ngày, tuyến..." id="logSearch" oninput="renderLog()">
-      <button class="btn-refresh" onclick="renderLog()">🔄 Làm mới</button>
+      <button class="btn-refresh" onclick="renderLog()">🔄 Cục Bộ</button>
+      <button class="btn-refresh" style="background:#059669;" onclick="syncFromSheet()" id="btnSyncSheet">☁️ Đồng Bộ Sheet</button>
     </div>
+    <div id="syncStatus" style="font-size:12px;color:var(--muted);padding:4px 0 6px;display:none;"></div>
     <div id="logList"></div>
   </div>
 </main>
@@ -675,7 +677,19 @@ async function saveAndClose(){
   if(s.scriptUrl){
     $('#savingOverlay').classList.add('show');
     try{
-      const payload={pickDate:entry.pickDate,user:entry.user,dk:entry.dk,mk:entry.mk,vm:entry.vm,km:entry.km,note:entry.note,images:b64Imgs,trips:entry.trips};
+      // ✅ FIX: Map field names to match Google Apps Script doPost()
+      const payload={
+        pickDate:entry.pickDate,
+        user:entry.user,
+        dong_kg:entry.dk,
+        mat_kg:entry.mk,
+        vang_m3:entry.vm,
+        kem_m3:entry.km,
+        routes:(entry.trips||[]).map(t=>t.route).join(', '),
+        note:entry.note,
+        images:b64Imgs,
+        trips:entry.trips
+      };
       const res=await fetch(s.scriptUrl,{method:'POST',body:JSON.stringify(payload)});
       const json=await res.json();
       if(json.status==='ok'){logs[0].imgLinks=json.links||[];saveLogs(logs);showToast('✅ Đã lưu Google Sheet!');}
@@ -760,7 +774,73 @@ function doPrint(){
   w.document.close();setTimeout(()=>w.print(),700);
 }
 
-// ══════════════════════ LOG ══════════════════════
+// ══════════════════════ SYNC FROM SHEET ══════════════════════
+async function syncFromSheet(){
+  const s=getSettings();
+  if(!s.scriptUrl){showToast('⚠️ Chưa cài Script URL trong Cài Đặt');return;}
+  const btn=document.getElementById('btnSyncSheet');
+  const status=document.getElementById('syncStatus');
+  btn.textContent='⏳ Đang tải...';btn.disabled=true;
+  status.style.display='block';status.textContent='☁️ Đang tải dữ liệu từ Google Sheet...';
+  try{
+    // GET request returns sheet rows as JSON
+    const res=await fetch(s.scriptUrl+'?action=getLogs&limit=200',{method:'GET'});
+    const json=await res.json();
+    if(json.status==='ok'&&Array.isArray(json.rows)&&json.rows.length){
+      // Merge: sheet rows → convert to log entry format → add to local if not exist
+      const localLogs=getLogs();
+      let added=0;
+      json.rows.forEach(row=>{
+        // row: [Thời Gian, Ngày Bốc, Tuyến, Người Tạo, Đông(kg), Mát(kg), Váng(m³), Kem(m³), Ghi Chú, Ảnh1..4]
+        const [timeStr,pickDate,routes,user,dong_kg,mat_kg,vang_m3,kem_m3,note,...imgLinks]=row;
+        const timestamp=new Date(timeStr).getTime()||Date.now();
+        // Check duplicate by timestamp
+        const exists=localLogs.some(e=>Math.abs((e.timestamp||0)-timestamp)<60000&&e.user===user);
+        if(!exists){
+          const synced={
+            pickDate:pickDate||'',
+            user:user||'',
+            note:note||'',
+            timestamp:timestamp,
+            dk:parseFloat(dong_kg)||0,
+            mk:parseFloat(mat_kg)||0,
+            vm:parseFloat(vang_m3)||0,
+            km:parseFloat(kem_m3)||0,
+            imgLinks:imgLinks.filter(Boolean),
+            images:[],
+            trips:[{
+              id:1,route:routes||'HCM-DN',
+              channels:{},
+            }],
+            _fromSheet:true
+          };
+          localLogs.push(synced);
+          added++;
+        }
+      });
+      // Sort by timestamp desc
+      localLogs.sort((a,b)=>(b.timestamp||0)-(a.timestamp||0));
+      saveLogs(localLogs);
+      renderLog();
+      const msg=added>0?`✅ Đã đồng bộ ${added} mục mới từ Sheet!`:'✅ Dữ liệu đã cập nhật, không có mục mới.';
+      status.textContent=msg;showToast(msg);
+    }else if(json.status==='ok'){
+      status.textContent='ℹ️ Sheet chưa có dữ liệu hoặc chưa cập nhật GAS mới.';
+      showToast('ℹ️ Sheet chưa có dữ liệu để đồng bộ');
+    }else{
+      status.textContent='⚠️ Lỗi: '+(json.msg||'Không rõ');
+      showToast('⚠️ Lỗi khi đồng bộ');
+    }
+  }catch(err){
+    status.textContent='⚠️ Không kết nối được: '+err.message;
+    showToast('⚠️ Không kết nối được Sheet');
+  }finally{
+    btn.textContent='☁️ Đồng Bộ Sheet';btn.disabled=false;
+    setTimeout(()=>{status.style.display='none';},5000);
+  }
+}
+
+
 function renderLog(){
   const logs=getLogs();
   const q=($('#logSearch')?.value||'').toLowerCase();
