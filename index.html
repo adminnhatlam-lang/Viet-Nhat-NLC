@@ -499,6 +499,7 @@ async function loadAndRenderLog(){
 function parseSheetRows(rows){
   const groups={};
   const result=[];
+  // Đảo ngược để dòng mới nhất được xử lý cuối (nhưng sort lại sau)
   rows.forEach(row=>{
     const timeStr=String(row[0]||'');
     const pickDate=String(row[1]||'');
@@ -515,6 +516,8 @@ function parseSheetRows(rows){
     const actVang=parseFloat(row[15])||0;
     const actKem=parseFloat(row[16])||0;
     const groupId=String(row[17]||'');
+    const sheetStatus=String(row[18]||'none').trim();
+    const invoiceNote=String(row[19]||'');
     const timestamp=timeStr?new Date(timeStr).getTime():0;
     if(!timestamp)return;
     const rKey=ROUTE_NAMES[routeKey]?routeKey:'HCM-DN';
@@ -527,7 +530,7 @@ function parseSheetRows(rows){
 
     if(groupId){
       if(!groups[groupId]){
-        groups[groupId]={pickDate,user,note,timestamp,imgLinks:imgs,trips:[trip],_groupId:groupId,_rowKey:rowKey,_fromSheet:true};
+        groups[groupId]={pickDate,user,note,timestamp,imgLinks:imgs,trips:[trip],_groupId:groupId,_rowKey:rowKey,_fromSheet:true,_status:sheetStatus,invoiceNote};
         if(actual)groups[groupId]['act_'+rKey]=actual;
       } else {
         const g=groups[groupId];
@@ -535,13 +538,27 @@ function parseSheetRows(rows){
         if(actual)g['act_'+rKey]=actual;
         if(imgs.length)g.imgLinks=[...new Set([...g.imgLinks,...imgs])];
         if(note&&!g.note)g.note=note;
+        if(sheetStatus&&sheetStatus!=='none'&&!g._status)g._status=sheetStatus;
+        if(invoiceNote&&!g.invoiceNote)g.invoiceNote=invoiceNote;
         // Giữ timestamp nhỏ nhất làm đại diện nhóm
         if(timestamp<g.timestamp)g.timestamp=timestamp;
       }
     } else {
-      const entry2={pickDate,user,note,timestamp,imgLinks:imgs,trips:[trip],_rowKey:rowKey,_fromSheet:true};
-      if(actual)entry2['act_'+rKey]=actual;
-      result.push(entry2);
+      // Không có groupId → group theo pickDate+user để gộp các tuyến cùng ngày/người
+      const autoGroupKey='auto_'+pickDate+'_'+user;
+      if(!groups[autoGroupKey]){
+        groups[autoGroupKey]={pickDate,user,note,timestamp,imgLinks:imgs,trips:[trip],_rowKey:rowKey,_fromSheet:true,_status:sheetStatus,invoiceNote};
+        if(actual)groups[autoGroupKey]['act_'+rKey]=actual;
+      } else {
+        const g=groups[autoGroupKey];
+        if(!g.trips.find(t=>t.route===rKey))g.trips.push(trip);
+        if(actual)g['act_'+rKey]=actual;
+        if(imgs.length)g.imgLinks=[...new Set([...g.imgLinks,...imgs])];
+        if(note&&!g.note)g.note=note;
+        if(sheetStatus&&sheetStatus!=='none')g._status=sheetStatus;
+        if(invoiceNote)g.invoiceNote=invoiceNote;
+        if(timestamp<g.timestamp)g.timestamp=timestamp;
+      }
     }
   });
   const grouped=Object.values(groups);
@@ -586,9 +603,8 @@ function renderLog(entries){
 function buildLogRouteCard(e,eIdx,trip){
   const rName=ROUTE_NAMES[trip.route]||trip.route;
   // Status từ local meta hoặc từ entry
-  const meta=getLocalMeta();
-  const metaKey=e._rowKey||eIdx;
-  const status=(meta[metaKey]?.status)||e['_status']||'none';
+  // Status: ưu tiên từ Sheet (_status), sau đó local meta
+  const status=e['_status']||'none';
   const sbCls=status==='paid'?'lsb-paid':status==='filed'?'lsb-filed':'lsb-none';
   const sbTxt=status==='paid'?'✅ Đã thanh toán':status==='filed'?'📋 Đã lập hồ sơ':'⏳ Chờ xử lý';
   const cardCls=status==='paid'?'status-paid':status==='filed'?'status-filed':'';
@@ -696,24 +712,35 @@ function buildLogRouteCard(e,eIdx,trip){
       <button class="btn-ls btn-ls-paid ${status==='paid'?'on':''}" onclick="toggleStatus(${eIdx},'${trip.route}','paid')">✅ TT</button>
       <span class="log-ftr-spacer"></span>
       <button class="btn-ls btn-ls-share" onclick="shareTripLog(${eIdx},'${trip.route}')">💬</button>
+      <button class="btn-ls" style="background:#f1f5f9;border:1.5px solid var(--border2);color:var(--text);" onclick="openInvoiceEdit(${eIdx},'${trip._rowKey||e._rowKey}')">✏️</button>
       <button class="btn-ls btn-ls-del" onclick="deleteEntry(${eIdx})">🗑️</button>
     </div>
+    ${e.invoiceNote?`<div style="background:#fefce8;border-left:3px solid #f59e0b;padding:6px 12px;font-size:12px;color:#92400e;border-radius:0 0 8px 8px;">📄 Số HD: ${e.invoiceNote}</div>`:''}
   </div>`;
 }
 
 function toggleChDetail(id){const el=document.getElementById(id);if(el)el.classList.toggle('open');}
 
-function toggleStatus(eIdx,routeKey,newStatus){
+async function toggleStatus(eIdx,routeKey,newStatus){
   const allEntries=_sheetCache.concat(_pendingLocal);
   const e=allEntries[eIdx];if(!e)return;
-  const meta=getLocalMeta();
-  const mk=e._rowKey||eIdx;
-  if(!meta[mk])meta[mk]={};
-  meta[mk].status=meta[mk].status===newStatus?'none':newStatus;
-  saveLocalMeta(meta);
+  const cur=e._status||'none';
+  const next=cur===newStatus?'none':newStatus;
+  e._status=next;
+  // Update tất cả trips cùng group
+  allEntries.filter(x=>x._groupId&&x._groupId===e._groupId).forEach(x=>x._status=next);
   renderLog(allEntries);
-  const st=meta[mk].status;
+  const st=next;
   showToast(st==='paid'?'✅ Đã thanh toán':st==='filed'?'📋 Đã lập hồ sơ':'↩️ Đã bỏ trạng thái');
+  // Sync lên Sheet
+  const s=getSettings();
+  if(s.scriptUrl&&e._rowKey){
+    try{
+      await fetch(s.scriptUrl,{method:'POST',body:JSON.stringify({
+        action:'updateStatus',groupId:e._groupId||'',rowKey:e._rowKey,status:next
+      })});
+    }catch(err){}
+  }
 }
 
 function deleteEntry(idx){
@@ -1066,9 +1093,48 @@ function saveEditLog(){
 }
 function closeEdit(){
   $('#editModal').classList.remove('open');
-  editIndex=-1;_actIdx=-1;_actRoute='';
+  editIndex=-1;_actIdx=-1;_actRoute='';_invoiceRowKey='';
   $('#saveEditBtn').onclick=saveEditLog;
   $('#editModalTitle').textContent='✏️ Chỉnh Sửa';
+}
+
+let _invoiceEIdx=-1,_invoiceRowKey='';
+function openInvoiceEdit(eIdx,rowKey){
+  _invoiceEIdx=eIdx;_invoiceRowKey=rowKey||'';
+  const allEntries=_sheetCache.concat(_pendingLocal);
+  const e=allEntries[eIdx]||{};
+  $('#editModalTitle').textContent='✏️ Số Hoá Đơn / Ghi Chú HĐ';
+  $('#editBody').innerHTML=`
+    <div style="margin-bottom:12px;">
+      <label style="font-size:11px;color:var(--muted);font-weight:700;display:block;margin-bottom:5px;letter-spacing:.5px;">📄 SỐ HOÁ ĐƠN / GHI CHÚ</label>
+      <input type="text" id="invoice-note" placeholder="VD: HD001, TT ngày 08/05..." value="${e.invoiceNote||''}"
+        style="width:100%;padding:10px;border:1.5px solid var(--border);border-radius:8px;font-size:14px;font-family:'Be Vietnam Pro',sans-serif;">
+    </div>`;
+  $('#saveEditBtn').onclick=saveInvoiceEdit;
+  $('#editModal').classList.add('open');
+}
+
+async function saveInvoiceEdit(){
+  if(_invoiceEIdx<0)return;
+  const allEntries=_sheetCache.concat(_pendingLocal);
+  const e=allEntries[_invoiceEIdx];if(!e)return;
+  const note=$('#invoice-note').value.trim();
+  e.invoiceNote=note;
+  // Update tất cả trips cùng group
+  allEntries.filter(x=>x._groupId&&x._groupId===e._groupId).forEach(x=>x.invoiceNote=note);
+  closeEdit();renderLog(allEntries);
+  showToast('✅ Đã lưu số hoá đơn');
+  // Sync lên Sheet
+  const s=getSettings();
+  if(s.scriptUrl&&_invoiceRowKey){
+    try{
+      await fetch(s.scriptUrl,{method:'POST',body:JSON.stringify({
+        action:'updateInvoice',groupId:e._groupId||'',rowKey:_invoiceRowKey,invoiceNote:note
+      })});
+    }catch(err){}
+  }
+  // Reload để cập nhật từ Sheet
+  setTimeout(()=>loadAndRenderLog(),800);
 }
 
 function doPrint(){
