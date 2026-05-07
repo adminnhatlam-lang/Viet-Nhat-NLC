@@ -394,12 +394,16 @@ const ROUTE_NAMES={
   'HCM-HCM':'Nội Bộ HCM','DN-HCM':'Đà Nẵng → HCM','HN-HCM':'Hà Nội → HCM'
 };
 const ROUTE_OPTIONS=Object.entries(ROUTE_NAMES);
+const M3_TO_KG=333;
 
-const LOG_KEY='nhatLam_log_v4';
-let imgFiles=[],trips=[],tripCounter=0,currentEntry=null,editIndex=-1,editMode='',editRouteId='';
+// ══════════════════════ STORAGE (Settings chỉ) ══════════════════════
+let imgFiles=[],trips=[],tripCounter=0,currentEntry=null,editIndex=-1;
+let _actIdx=-1,_actRoute='';
 
-function getLogs(){try{return JSON.parse(localStorage.getItem(LOG_KEY)||'[]');}catch(e){return[];}}
-function saveLogs(a){localStorage.setItem(LOG_KEY,JSON.stringify(a));}
+// Sheet là nguồn sự thật duy nhất → cache tạm thời
+let _sheetCache=[];    // dữ liệu từ Sheet
+let _pendingLocal=[];  // entry đã lưu nhưng chưa sync lên Sheet (offline)
+
 function getSettings(){try{return JSON.parse(localStorage.getItem('nhatLam_settings')||'{}');}catch(e){return{};}}
 function saveSettings(){
   const s={scriptUrl:$('#scriptUrl').value.trim(),sheetUrl:$('#sheetUrl').value.trim(),userName:$('#userName').value.trim()};
@@ -413,6 +417,13 @@ function loadSettings(){
   if(s.sheetUrl)$('#sheetUrl').value=s.sheetUrl;
   if(s.userName)$('#userName').value=s.userName;
 }
+// Pending local (offline fallback)
+function getPending(){try{return JSON.parse(localStorage.getItem('nhatLam_pending')||'[]');}catch(e){return[];}}
+function savePending(a){try{localStorage.setItem('nhatLam_pending',JSON.stringify(a));}catch(e){}}
+// Status + actual edits cache (nhỏ, không có ảnh)
+function getLocalMeta(){try{return JSON.parse(localStorage.getItem('nhatLam_meta')||'{}');}catch(e){return{};}}
+function saveLocalMeta(m){try{localStorage.setItem('nhatLam_meta',JSON.stringify(m));}catch(e){}}
+
 function $(sel){return document.querySelector(sel);}
 
 // ══════════════════════ INIT ══════════════════════
@@ -420,8 +431,9 @@ window.addEventListener('DOMContentLoaded',()=>{
   const t=new Date();
   $('#pickDate').value=t.toISOString().split('T')[0];
   $('#todayBadge').textContent=fmtDate(t);
-  loadSettings();renderLog();
-  addTrip(); // start with 1 trip board
+  loadSettings();
+  _pendingLocal=getPending();
+  addTrip();
   if(/Android|iPhone|iPad/i.test(navigator.userAgent))$('#btnPrint').style.display='none';
 });
 
@@ -436,172 +448,357 @@ function switchTab(name,btn){
   document.querySelectorAll('.tab-btn').forEach(b=>b.classList.remove('active'));
   document.getElementById('page-'+name).classList.add('active');
   btn.classList.add('active');
-  if(name==='log'){renderLog();autoSyncFromSheet();}
+  if(name==='log') loadAndRenderLog();
 }
 
-// Tự động đồng bộ từ Sheet khi vào tab (không hiển thị lỗi nếu chưa cài URL)
-async function autoSyncFromSheet(){
+// ══════════════════════ LOAD FROM SHEET (nguồn duy nhất) ══════════════════════
+async function loadAndRenderLog(){
+  const cont=$('#logList');
+  const status=$('#syncStatus');
+  // Render pending local ngay lập tức (offline entries)
+  renderLog(_pendingLocal.concat(_sheetCache));
   const s=getSettings();
-  if(!s.scriptUrl)return;
-  const status=document.getElementById('syncStatus');
-  if(status){status.style.display='block';status.textContent='☁️ Đang đồng bộ từ Sheet...';}
+  if(!s.scriptUrl){
+    if(_pendingLocal.length){renderLog(_pendingLocal);}
+    else{cont.innerHTML='<div class="log-empty">⚙️ Chưa cài Script URL<br><small>Vào tab Cài Đặt để nhập URL</small></div>';}
+    return;
+  }
+  if(status){status.style.display='block';status.textContent='☁️ Đang tải từ Sheet...';}
   try{
-    const res=await fetch(s.scriptUrl+'?action=getLogs&limit=200',{method:'GET'});
+    const res=await fetch(s.scriptUrl+'?action=getLogs&limit=300');
     const json=await res.json();
-    if(json.status==='ok'&&Array.isArray(json.rows)&&json.rows.length){
-      const localLogs=getLogs();let added=0;
-      const newEntries=json.rows.map(sheetRowToEntry).filter(Boolean);
-      const merged=mergeSheetEntries(newEntries);
-      const existingKeys=new Set(localLogs.map(e=>e._rowKey||'').filter(Boolean));
-      const existingTS=localLogs.map(e=>e.timestamp||0);
-      merged.forEach(entry=>{
-        // Dedup: theo _rowKey (chính xác) hoặc timestamp+user+pickDate
-        const isDup=entry._rowKey&&existingKeys.has(entry._rowKey);
-        const isTSDup=!entry._rowKey&&existingTS.some(ts=>Math.abs(ts-entry.timestamp)<60000);
-        if(!isDup&&!isTSDup){
-          localLogs.push(entry);added++;
-        } else if(entry._rowKey&&existingKeys.has(entry._rowKey)){
-          // Cập nhật actual nếu có
-          const idx=localLogs.findIndex(e=>e._rowKey===entry._rowKey);
-          if(idx>=0){
-            const rKey=entry.trips[0]?.route;
-            if(rKey&&entry[`act_${rKey}`]){
-              localLogs[idx][`act_${rKey}`]=entry[`act_${rKey}`];
-            }
-            if(entry.imgLinks?.length)localLogs[idx].imgLinks=entry.imgLinks;
-          }
-        }
+    if(json.status==='ok'&&Array.isArray(json.rows)){
+      _sheetCache=parseSheetRows(json.rows);
+      // Merge local meta (status, actual edits) vào sheet cache
+      const meta=getLocalMeta();
+      _sheetCache.forEach(e=>{
+        const mk=meta[e._rowKey]||{};
+        if(mk.status)e._status=mk.status;
+        // actual đã được sync lên sheet rồi → đọc từ sheet
       });
-      localLogs.sort((a,b)=>(b.timestamp||0)-(a.timestamp||0));
-      saveLogs(localLogs);renderLog();
-      if(status){
-        status.textContent=added>0?`✅ Đồng bộ ${added} mục mới từ Sheet`:'✅ Dữ liệu đã cập nhật';
-        setTimeout(()=>{status.style.display='none';},3000);
-      }
-    }else{
-      if(status)setTimeout(()=>{status.style.display='none';},2000);
+      renderLog(_sheetCache.concat(_pendingLocal));
+      if(status){status.textContent='✅ Đã tải '+_sheetCache.length+' mục';setTimeout(()=>status.style.display='none',2000);}
     }
   }catch(err){
-    if(status){status.textContent='⚠️ Không kết nối được Sheet';setTimeout(()=>{status.style.display='none';},3000);}
+    if(status){status.textContent='⚠️ Không tải được Sheet';setTimeout(()=>status.style.display='none',3000);}
+    renderLog(_pendingLocal);
   }
 }
 
-// ✅ Chuyển 1 dòng Sheet thành entry chuẩn (có trips + channels đầy đủ)
-// ✅ Mỗi dòng Sheet = 1 tuyến riêng
-// Cột: [Thời Gian, Ngày Bốc, Tuyến, Người Tạo, Đông(kg), Mát(kg), Váng(m³), Kem(m³), Ghi Chú, Img1, Img2, Img3, Img4, Act_Dong, Act_Mat, Act_Vang, Act_Kem, GroupID]
-function sheetRowToEntry(row){
-  const timeStr=row[0]||'';
-  const pickDate=row[1]||'';
-  const routeKey=(row[2]||'').trim();
-  const user=row[3]||'';
-  const dk=parseFloat(row[4])||0;
-  const mk=parseFloat(row[5])||0;
-  const vm=parseFloat(row[6])||0;
-  const km=parseFloat(row[7])||0;
-  const note=row[8]||'';
-  const imgLinks=[row[9],row[10],row[11],row[12]].filter(Boolean);
-  const actDong=parseFloat(row[13])||0;
-  const actMat=parseFloat(row[14])||0;
-  const actVang=parseFloat(row[15])||0;
-  const actKem=parseFloat(row[16])||0;
-  const groupId=row[17]||'';
-
-  const timestamp=timeStr?new Date(timeStr).getTime():0;
-  if(!timestamp)return null;
-
-  const rKey=ROUTE_NAMES[routeKey]?routeKey:'HCM-DN';
-  const ch={'tong-sheet':{
-    dong:{v:dk,u:'kg'},mat:{v:mk,u:'kg'},
-    vang:{v:vm,u:'m³'},kem:{v:km,u:'m³'}
-  }};
-  const trip={id:1,route:rKey,channels:ch};
-  const entry={
-    pickDate,user,note,timestamp,
-    dk,mk,vm,km,
-    imgLinks,images:[],
-    trips:[trip],
-    _fromSheet:true,
-    _groupId:groupId,
-    _rowKey:timeStr+'|'+routeKey
-  };
-  if(actDong||actMat||actVang||actKem){
-    entry[`act_${rKey}`]={dong:actDong,mat:actMat,vang:actVang,kem:actKem};
-  }
-  return entry;
-}
-
-// Gộp các dòng Sheet có cùng groupId thành 1 entry (nhiều tuyến)
-function mergeSheetEntries(entries){
+// Parse mảng rows từ Sheet thành danh sách entry (mỗi row = 1 tuyến)
+function parseSheetRows(rows){
   const groups={};
-  const singles=[];
-  entries.forEach(e=>{
-    if(e._groupId){
-      if(!groups[e._groupId]){
-        groups[e._groupId]={...e,trips:[...e.trips]};
+  const result=[];
+  rows.forEach(row=>{
+    const timeStr=String(row[0]||'');
+    const pickDate=String(row[1]||'');
+    const routeKey=String(row[2]||'').trim();
+    const user=String(row[3]||'');
+    const dk=parseFloat(row[4])||0;
+    const mk=parseFloat(row[5])||0;
+    const vm=parseFloat(row[6])||0;
+    const km=parseFloat(row[7])||0;
+    const note=String(row[8]||'');
+    const imgs=[row[9],row[10],row[11],row[12]].map(String).filter(s=>s&&s!=='false'&&s.startsWith('http'));
+    const actDong=parseFloat(row[13])||0;
+    const actMat=parseFloat(row[14])||0;
+    const actVang=parseFloat(row[15])||0;
+    const actKem=parseFloat(row[16])||0;
+    const groupId=String(row[17]||'');
+    const timestamp=timeStr?new Date(timeStr).getTime():0;
+    if(!timestamp)return;
+    const rKey=ROUTE_NAMES[routeKey]?routeKey:'HCM-DN';
+    const rowKey=timestamp+'|'+routeKey;
+    const trip={id:1,route:rKey,dk,mk,vm,km,channels:{'tong-sheet':{dong:{v:dk,u:'kg'},mat:{v:mk,u:'kg'},vang:{v:vm,u:'m³'},kem:{v:km,u:'m³'}}}};
+    const actual=(actDong||actMat||actVang||actKem)?{dong:actDong,mat:actMat,vang:actVang,kem:actKem}:null;
+
+    if(groupId){
+      if(!groups[groupId]){
+        groups[groupId]={pickDate,user,note,timestamp,imgLinks:imgs,trips:[trip],_groupId:groupId,_rowKey:rowKey,_fromSheet:true};
+        if(actual)groups[groupId]['act_'+rKey]=actual;
       } else {
-        const g=groups[e._groupId];
-        // Thêm tuyến vào group
-        const trip=e.trips[0];
-        if(!g.trips.find(t=>t.route===trip.route)){
-          g.trips.push(trip);
-        }
-        // Merge actual
-        const rKey=trip.route;
-        if(e[`act_${rKey}`])g[`act_${rKey}`]=e[`act_${rKey}`];
-        // Merge imgLinks
-        g.imgLinks=[...new Set([...(g.imgLinks||[]),...(e.imgLinks||[])])].filter(Boolean);
-        // Cộng tổng
-        g.dk+=e.dk;g.mk+=e.mk;g.vm+=e.vm;g.km+=e.km;
-        // Merge note
-        if(e.note&&!g.note)g.note=e.note;
+        const g=groups[groupId];
+        if(!g.trips.find(t=>t.route===rKey))g.trips.push(trip);
+        if(actual)g['act_'+rKey]=actual;
+        if(imgs.length&&!g.imgLinks.length)g.imgLinks=imgs;
+        if(note&&!g.note)g.note=note;
+        if(timestamp<g.timestamp)g.timestamp=timestamp;
       }
     } else {
-      singles.push(e);
+      const entry2={pickDate,user,note,timestamp,imgLinks:imgs,trips:[trip],_rowKey:rowKey,_fromSheet:true};
+      if(actual)entry2['act_'+rKey]=actual;
+      result.push(entry2);
     }
   });
-  return [...Object.values(groups),...singles];
+  const grouped=Object.values(groups);
+  const all=[...grouped,...result].sort((a,b)=>b.timestamp-a.timestamp);
+  return all;
+}
+
+// ══════════════════════ RENDER LOG ══════════════════════
+function renderLog(entries){
+  const rawEntries=entries||_sheetCache.concat(_pendingLocal);
+  const q=($('#logSearch')?.value||'').toLowerCase();
+  const filtered=q?rawEntries.filter(e=>(e.pickDate||'').toLowerCase().includes(q)||(e.note||'').toLowerCase().includes(q)||(e.trips||[]).some(t=>(ROUTE_NAMES[t.route]||'').toLowerCase().includes(q))):rawEntries;
+  const cont=$('#logList');
+  if(!filtered.length){cont.innerHTML='<div class="log-empty">📂<br>Chưa có nhật ký'+(q?' phù hợp':'')+'</div>';return;}
+  cont.innerHTML=filtered.map((e,idx)=>{
+    const ts=e.timestamp?new Date(e.timestamp).toLocaleTimeString('vi-VN'):'';
+    const routeCards=(e.trips||[]).map(trip=>buildLogRouteCard(e,idx,trip)).join('');
+    // Ảnh: ưu tiên imgLinks (Drive URL)
+    const imgHtml=(e.imgLinks||[]).filter(s=>s&&s.startsWith('http')).map(href=>
+      `<a href="${href}" target="_blank"><img style="width:60px;height:60px;border-radius:6px;object-fit:cover;border:1.5px solid var(--border);margin:2px;cursor:pointer;" src="${href}" onerror="this.parentElement.style.display='none'"></a>`
+    ).join('');
+    const isPending=!!e._pending;
+    return `<div class="log-group">
+      <div class="log-group-date">📅 ${e.pickDate||'---'} · ${ts} · 👤 ${e.user||'---'}${isPending?' <span style="color:#f59e0b;font-size:10px;">⏳ Chờ sync</span>':''}</div>
+      ${routeCards}
+      ${imgHtml?`<div style="display:flex;flex-wrap:wrap;gap:4px;padding:4px 4px 8px;">${imgHtml}</div>`:''}
+      ${e.note?`<div style="font-size:12px;color:var(--muted);background:#f8fafc;padding:7px 10px;border-radius:6px;margin-bottom:6px;">📝 ${e.note}</div>`:''}
+    </div>`;
+  }).join('');
+}
+
+function buildLogRouteCard(e,eIdx,trip){
+  const rName=ROUTE_NAMES[trip.route]||trip.route;
+  // Status từ local meta hoặc từ entry
+  const meta=getLocalMeta();
+  const metaKey=e._rowKey||eIdx;
+  const status=(meta[metaKey]?.status)||e['_status']||'none';
+  const sbCls=status==='paid'?'lsb-paid':status==='filed'?'lsb-filed':'lsb-none';
+  const sbTxt=status==='paid'?'✅ Đã thanh toán':status==='filed'?'📋 Đã lập hồ sơ':'⏳ Chờ xử lý';
+  const cardCls=status==='paid'?'status-paid':status==='filed'?'status-filed':'';
+
+  // Số book từ trip
+  const dk=trip.dk||0, mk=trip.mk||0, vm=trip.vm||0, km=trip.km||0;
+
+  // Số thực tế
+  const actual=e['act_'+trip.route]||{};
+  const hasActual=!!(actual.dong||actual.mat||actual.vang||actual.kem);
+
+  // Giá trị hiển thị: thực tế nếu có, không thì dùng số book
+  const disDk=hasActual?actual.dong:dk;
+  const disMk=hasActual?actual.mat:mk;
+  const disVm=hasActual?actual.vang:vm;
+  const disKm=hasActual?actual.kem:km;
+  const disTong=disDk+disMk+(disVm*M3_TO_KG)+(disKm*M3_TO_KG);
+  const bookTong=dk+mk+(vm*M3_TO_KG)+(km*M3_TO_KG);
+
+  // Pills header
+  const pills=[];
+  if(disDk>0)pills.push(`<span class="log-total-pill ltp-dong">❄️ ${fmtN(disDk)} kg</span>`);
+  if(disMk>0)pills.push(`<span class="log-total-pill ltp-mat">🌡 ${fmtN(disMk)} kg</span>`);
+  if(disVm>0)pills.push(`<span class="log-total-pill ltp-vang">🍦 ${fmtN(disVm)} m³</span>`);
+  if(disKm>0)pills.push(`<span class="log-total-pill ltp-kem">🍨 ${fmtN(disKm)} m³</span>`);
+  if(disTong>0&&(disVm>0||disKm>0)){
+    pills.push(`<span class="log-total-pill" style="background:#1e3a5f;color:#f59e0b;border:1px solid rgba(245,158,11,.4);font-size:10px;">📊 ${fmtN(Math.round(disTong))} kg</span>`);
+  }
+
+  // Chi tiết kênh (khi expand)
+  const detailId='det-'+eIdx+'-'+trip.route.replace(/-/g,'_');
+  let chDetail='';
+  const ch=trip.channels?.['tong-sheet'];
+  if(ch){
+    // Entry từ Sheet → hiển thị số book gốc
+    const parts=[];
+    if(dk>0)parts.push(`<span class="scp scp-dong">❄️ Đông: ${fmtN(dk)} kg</span>`);
+    if(mk>0)parts.push(`<span class="scp scp-mat">🌡 Mát: ${fmtN(mk)} kg</span>`);
+    if(vm>0)parts.push(`<span class="scp scp-vang">🍦 Váng: ${fmtN(vm)} m³</span>`);
+    if(km>0)parts.push(`<span class="scp scp-kem">🍨 Kem: ${fmtN(km)} m³</span>`);
+    chDetail=`<div class="log-ch-row-detail"><div class="log-ch-name-d" style="color:#92400e;font-weight:700;">📋 Số đặt xe</div><div class="log-ch-pills-d">${parts.join('')}</div></div>`;
+  } else {
+    CHS.forEach(ch=>{
+      const cd=trip.channels?.[ch.id]||{};
+      const ps=[];
+      TYPES.forEach(t=>{if(cd[t]&&cd[t].v>0)ps.push(`<span class="scp scp-${t}">${TYPE_ICO[t]} ${TYPE_LBL[t]}: ${fmtN(cd[t].v)} ${cd[t].u}</span>`);});
+      if(!ps.length)return;
+      chDetail+=`<div class="log-ch-row-detail"><div class="log-ch-name-d">${ch.icon} ${ch.name}</div><div class="log-ch-pills-d">${ps.join('')}</div></div>`;
+    });
+  }
+
+  // Tổng quy đổi box
+  let totalBox='';
+  if(bookTong>0&&(vm>0||km>0)){
+    const isAct=hasActual;
+    const label=isAct?'📊 TỔNG THỰC TẾ':'📊 TỔNG QUY ĐỔI';
+    const tVal=isAct?disTong:bookTong;
+    const parts2=[];
+    if(isAct){
+      if(actual.dong>0)parts2.push(`❄️ ${fmtN(actual.dong)}`);
+      if(actual.mat>0)parts2.push(`🌡 ${fmtN(actual.mat)}`);
+      if(actual.vang>0)parts2.push(`🍦 ${fmtN(actual.vang)}m³×333=${fmtN(Math.round(actual.vang*M3_TO_KG))}`);
+      if(actual.kem>0)parts2.push(`🍨 ${fmtN(actual.kem)}m³×333=${fmtN(Math.round(actual.kem*M3_TO_KG))}`);
+    } else {
+      if(dk>0)parts2.push(`❄️ ${fmtN(dk)}`);
+      if(mk>0)parts2.push(`🌡 ${fmtN(mk)}`);
+      if(vm>0)parts2.push(`🍦 ${fmtN(vm)}m³×333=${fmtN(Math.round(vm*M3_TO_KG))}`);
+      if(km>0)parts2.push(`🍨 ${fmtN(km)}m³×333=${fmtN(Math.round(km*M3_TO_KG))}`);
+    }
+    totalBox=`<div style="background:linear-gradient(135deg,#1e3a5f,#1e4976);border-radius:8px;padding:8px 12px;margin-top:8px;display:flex;align-items:center;flex-wrap:wrap;gap:6px;">
+      <span style="font-size:10px;letter-spacing:1.5px;color:#94a3b8;font-weight:700;flex-shrink:0;">${label}</span>
+      <span style="font-size:10px;color:#cbd5e1;flex:1;">${parts2.join(' + ')} kg</span>
+      <span style="font-size:14px;font-weight:800;color:#f59e0b;">${fmtN(Math.round(tVal))} kg</span>
+    </div>`;
+  }
+
+  // Actual section
+  let actualHtml='';
+  if(hasActual){
+    const rows2=TYPES.map(t=>{
+      const bk=t==='dong'?dk:t==='mat'?mk:t==='vang'?vm:km;
+      const ac=actual[t]||0;
+      const unit=t==='vang'||t==='kem'?'m³':'kg';
+      if(!bk&&!ac)return'';
+      const diff=ac-bk;
+      const diffEl=diff===0?`<span class="lcr-same">= đúng</span>`:diff>0?`<span class="lcr-pos">+${fmtN(diff)}</span>`:`<span class="lcr-neg">${fmtN(diff)}</span>`;
+      return `<div class="log-compare-row"><span class="lcr-label">${TYPE_ICO[t]} ${TYPE_LBL[t]}</span><span class="lcr-book">${fmtN(bk)} ${unit}</span><span>→</span><span class="lcr-actual">${fmtN(ac)} ${unit}</span>${diffEl}</div>`;
+    }).filter(Boolean).join('');
+    actualHtml=`<div class="log-actual"><div class="log-actual-hdr"><span>📦 SỐ THỰC TẾ</span><button class="log-actual-edit-btn" onclick="openActualEdit(${eIdx},'${trip.route}')">✏️ Cập nhật</button></div>${rows2}</div>`;
+  } else {
+    actualHtml=`<div class="log-actual"><div class="log-actual-hdr"><span>📦 SỐ THỰC TẾ</span><button class="log-actual-edit-btn" onclick="openActualEdit(${eIdx},'${trip.route}')">+ Nhập số thực tế</button></div><span class="log-actual-empty">Chưa nhập số thực tế</span></div>`;
+  }
+
+  return `<div class="log-card ${cardCls}">
+    <div class="log-card-hdr" onclick="toggleChDetail('${detailId}')">
+      <span class="log-route-badge">🚛 ${rName}</span>
+      <span class="log-status-badge ${sbCls}">${sbTxt}</span>
+      <div class="log-totals-hdr">${pills.join('')}</div>
+      <span style="font-size:11px;color:var(--muted2);margin-left:4px;">▼</span>
+    </div>
+    <div class="log-ch-detail" id="${detailId}">${chDetail||'<span style="color:var(--muted2);font-size:12px;">Không có dữ liệu kênh</span>'}</div>
+    <div class="log-card-body">${totalBox}${actualHtml}</div>
+    <div class="log-card-footer">
+      <button class="btn-ls btn-ls-filed ${status==='filed'||status==='paid'?'on':''}" onclick="toggleStatus(${eIdx},'${trip.route}','filed')">📋 Hồ Sơ</button>
+      <button class="btn-ls btn-ls-paid ${status==='paid'?'on':''}" onclick="toggleStatus(${eIdx},'${trip.route}','paid')">✅ TT</button>
+      <span class="log-ftr-spacer"></span>
+      <button class="btn-ls btn-ls-share" onclick="shareTripLog(${eIdx},'${trip.route}')">💬</button>
+      <button class="btn-ls btn-ls-del" onclick="deleteEntry(${eIdx})">🗑️</button>
+    </div>
+  </div>`;
+}
+
+function toggleChDetail(id){const el=document.getElementById(id);if(el)el.classList.toggle('open');}
+
+function toggleStatus(eIdx,routeKey,newStatus){
+  const allEntries=_sheetCache.concat(_pendingLocal);
+  const e=allEntries[eIdx];if(!e)return;
+  const meta=getLocalMeta();
+  const mk=e._rowKey||eIdx;
+  if(!meta[mk])meta[mk]={};
+  meta[mk].status=meta[mk].status===newStatus?'none':newStatus;
+  saveLocalMeta(meta);
+  renderLog(allEntries);
+  const st=meta[mk].status;
+  showToast(st==='paid'?'✅ Đã thanh toán':st==='filed'?'📋 Đã lập hồ sơ':'↩️ Đã bỏ trạng thái');
+}
+
+function deleteEntry(idx){
+  if(!confirm('Xoá mục này (chỉ xoá cục bộ)?'))return;
+  const allEntries=_sheetCache.concat(_pendingLocal);
+  const e=allEntries[idx];
+  if(!e)return;
+  if(e._fromSheet){showToast('⚠️ Không xoá được entry từ Sheet');return;}
+  _pendingLocal=_pendingLocal.filter(p=>p!==e);
+  savePending(_pendingLocal);
+  renderLog(_sheetCache.concat(_pendingLocal));
+  showToast('🗑️ Đã xoá');
+}
+
+function shareTripLog(eIdx,routeKey){
+  const allEntries=_sheetCache.concat(_pendingLocal);
+  const e=allEntries[eIdx];if(!e)return;
+  const trip=(e.trips||[]).find(t=>t.route===routeKey);
+  const rName=ROUTE_NAMES[routeKey]||routeKey;
+  const lines=[`🚛 NHẤT LÂM BOOK TẢI`,`📅 ${e.pickDate}`,`🗺 ${rName}`,`─────────────────────`];
+  if(trip){
+    const dk=trip.dk||0,mk=trip.mk||0,vm=trip.vm||0,km=trip.km||0;
+    if(dk>0)lines.push(`  ❄️ Đông: ${fmtN(dk)} kg`);
+    if(mk>0)lines.push(`  🌡 Mát: ${fmtN(mk)} kg`);
+    if(vm>0)lines.push(`  🍦 Váng: ${fmtN(vm)} m³`);
+    if(km>0)lines.push(`  🍨 Kem: ${fmtN(km)} m³`);
+  }
+  const txt=lines.join('\n');
+  if(navigator.share)navigator.share({title:'Nhất Lâm Book Tải',text:txt});
+  else navigator.clipboard.writeText(txt).then(()=>showToast('✅ Đã copy!'));
+}
+
+// ══════════════════════ ACTUAL EDIT ══════════════════════
+function openActualEdit(eIdx,routeKey){
+  _actIdx=eIdx;_actRoute=routeKey;
+  const allEntries=_sheetCache.concat(_pendingLocal);
+  const e=allEntries[eIdx];if(!e)return;
+  const trip=(e.trips||[]).find(t=>t.route===routeKey)||{};
+  const actual=e['act_'+routeKey]||{};
+  const dk=trip.dk||0,mk=trip.mk||0,vm=trip.vm||0,km=trip.km||0;
+  const booked={dong:dk,mat:mk,vang:vm,kem:km};
+  const rName=ROUTE_NAMES[routeKey]||routeKey;
+  const rows=TYPES.map(t=>`<div class="edit-cargo-row">
+    <span class="edit-type-lbl">${TYPE_ICO[t]} ${TYPE_LBL[t]}</span>
+    <input type="number" min="0" step="0.01" id="act-${t}" placeholder="${fmtN(booked[t])} (đặt)" value="${actual[t]||''}">
+    <span style="font-size:12px;color:var(--muted);">${t==='vang'||t==='kem'?'m³':'kg'}</span>
+  </div>`).join('');
+  $('#editModalTitle').textContent=`📦 Số thực tế – ${rName}`;
+  $('#editBody').innerHTML=`<div style="background:#f0f6ff;border-radius:8px;padding:10px;font-size:12px;color:#1e4976;margin-bottom:12px;">Nhập số <strong>thực tế</strong> sau khi bốc hàng. Để trống = giữ số đặt.</div>${rows}`;
+  $('#saveEditBtn').onclick=saveActualEdit;
+  $('#editModal').classList.add('open');
+}
+
+async function saveActualEdit(){
+  if(_actIdx<0)return;
+  const allEntries=_sheetCache.concat(_pendingLocal);
+  const e=allEntries[_actIdx];if(!e)return;
+  const actual={
+    dong:parseFloat($('#act-dong')?.value)||0,
+    mat:parseFloat($('#act-mat')?.value)||0,
+    vang:parseFloat($('#act-vang')?.value)||0,
+    kem:parseFloat($('#act-kem')?.value)||0
+  };
+  // Ghi vào cache
+  e['act_'+_actRoute]=actual;
+  // Nếu là _fromSheet → sync lên Sheet
+  if(e._fromSheet){
+    const s=getSettings();
+    if(s.scriptUrl&&e._rowKey){
+      try{
+        await fetch(s.scriptUrl,{method:'POST',body:JSON.stringify({
+          action:'updateActual',rowKey:e._rowKey,route:_actRoute,
+          act_dong:actual.dong,act_mat:actual.mat,act_vang:actual.vang,act_kem:actual.kem
+        })});
+        showToast('✅ Đã cập nhật số thực tế lên Sheet!');
+      }catch(err){showToast('✅ Đã lưu (sẽ sync sau)');}
+    }
+  } else {
+    // pending local → update in array
+    const pi=_pendingLocal.findIndex(p=>p===e);
+    if(pi>=0){_pendingLocal[pi]['act_'+_actRoute]=actual;savePending(_pendingLocal);}
+    showToast('✅ Đã lưu số thực tế');
+  }
+  closeEdit();
+  renderLog(allEntries);
 }
 
 // ══════════════════════ TRIP BOARDS ══════════════════════
 function addTrip(){
   if(trips.length>=5){showToast('Tối đa 5 tuyến');return;}
   const id=++tripCounter;
-  // Pick a default route not already chosen
   const usedRoutes=trips.map(t=>t.route);
   const avail=ROUTE_OPTIONS.find(([k])=>!usedRoutes.includes(k));
   const defaultRoute=avail?avail[0]:'HCM-DN';
   trips.push({id,route:defaultRoute,channels:{}});
-  CHS.forEach(ch=>{
-    trips[trips.length-1].channels[ch.id]={dong:{v:0,u:'kg'},mat:{v:0,u:'kg'},vang:{v:0,u:'m³'},kem:{v:0,u:'m³'}};
-  });
+  CHS.forEach(ch=>{trips[trips.length-1].channels[ch.id]={dong:{v:0,u:'kg'},mat:{v:0,u:'kg'},vang:{v:0,u:'m³'},kem:{v:0,u:'m³'}};});
   renderTripBoards();
 }
-
-function removeTrip(id){
-  trips=trips.filter(t=>t.id!==id);
-  renderTripBoards();
-  recalcLive();
-}
-
-function setTripRoute(id,route){
-  const trip=trips.find(t=>t.id===id);
-  if(trip){trip.route=route;renderTripBoardSubtotals(id);}
-}
-
+function removeTrip(id){trips=trips.filter(t=>t.id!==id);renderTripBoards();recalcLive();}
+function setTripRoute(id,route){const trip=trips.find(t=>t.id===id);if(trip){trip.route=route;renderTripBoardSubtotals(id);}}
 function updateCargo(tripId,chId,type,field,val){
-  const trip=trips.find(t=>t.id===tripId);
-  if(!trip)return;
+  const trip=trips.find(t=>t.id===tripId);if(!trip)return;
   trip.channels[chId][type][field]=field==='v'?parseFloat(val)||0:val;
-  renderTripBoardSubtotals(tripId);
-  recalcLive();
+  renderTripBoardSubtotals(tripId);recalcLive();
 }
-
 function renderTripBoards(){
-  const cont=document.getElementById('tripBoards');
-  cont.innerHTML=trips.map(trip=>buildTripBoardHTML(trip)).join('');
+  document.getElementById('tripBoards').innerHTML=trips.map(trip=>buildTripBoardHTML(trip)).join('');
   recalcLive();
 }
-
 function buildTripBoardHTML(trip){
   const routeOpts=ROUTE_OPTIONS.map(([k,v])=>`<option value="${k}" ${trip.route===k?'selected':''}>${v}</option>`).join('');
   const chSections=CHS.map(ch=>{
@@ -616,18 +813,13 @@ function buildTripBoardHTML(trip){
       return `<div class="cargo-box">
         <div class="cargo-box-label ${lblCls}">${TYPE_ICO[t]} ${TYPE_LBL[t].toUpperCase()}</div>
         <div class="cargo-box-input">
-          <input type="number" min="0" step="0.01" placeholder="0" value="${entry.v||''}"
-            oninput="updateCargo(${trip.id},'${ch.id}','${t}','v',this.value)">
+          <input type="number" min="0" step="0.01" placeholder="0" value="${entry.v||''}" oninput="updateCargo(${trip.id},'${ch.id}','${t}','v',this.value)">
           <select onchange="updateCargo(${trip.id},'${ch.id}','${t}','u',this.value)">${uOpts}</select>
         </div>
       </div>`;
     }).join('');
-    return `<div class="ch-section">
-      <div class="ch-section-header">${ch.icon} ${ch.name}</div>
-      <div class="cargo-row-4">${items}</div>
-    </div>`;
+    return `<div class="ch-section"><div class="ch-section-header">${ch.icon} ${ch.name}</div><div class="cargo-row-4">${items}</div></div>`;
   }).join('');
-
   return `<div class="trip-board" id="trip-${trip.id}">
     <div class="trip-board-header">
       <span style="font-size:16px;">🚛</span>
@@ -638,35 +830,24 @@ function buildTripBoardHTML(trip){
     <div class="trip-board-body">${chSections}</div>
   </div>`;
 }
-
 function renderTripBoardSubtotals(tripId){
-  const trip=trips.find(t=>t.id===tripId);
-  if(!trip)return;
+  const trip=trips.find(t=>t.id===tripId);if(!trip)return;
   const {dk,mk,vm,km}=calcTripTotal(trip);
-  const cont=document.getElementById(`sub-${tripId}`);
-  if(!cont)return;
+  const cont=document.getElementById('sub-'+tripId);if(!cont)return;
   const pills=[];
   if(dk>0)pills.push(`<span class="trip-sub-pill tsp-dong">❄️ ${fmtN(dk)} kg</span>`);
   if(mk>0)pills.push(`<span class="trip-sub-pill tsp-mat">🌡 ${fmtN(mk)} kg</span>`);
   if(vm>0)pills.push(`<span class="trip-sub-pill tsp-vang">🍦 ${fmtN(vm)} m³</span>`);
   if(km>0)pills.push(`<span class="trip-sub-pill tsp-kem">🍨 ${fmtN(km)} m³</span>`);
   cont.innerHTML=pills.join('');
-  const board=document.getElementById(`trip-${tripId}`);
+  const board=document.getElementById('trip-'+tripId);
   if(board)board.classList.toggle('has-data',dk+mk+vm+km>0);
 }
-
 function calcTripTotal(trip){
   let dk=0,mk=0,vm=0,km=0;
-  CHS.forEach(ch=>{
-    const cd=trip.channels[ch.id]||{};
-    dk+=toKg(cd.dong?.v||0,cd.dong?.u||'kg');
-    mk+=toKg(cd.mat?.v||0,cd.mat?.u||'kg');
-    vm+=cd.vang?.v||0;
-    km+=cd.kem?.v||0;
-  });
+  CHS.forEach(ch=>{const cd=trip.channels[ch.id]||{};dk+=toKg(cd.dong?.v||0,cd.dong?.u||'kg');mk+=toKg(cd.mat?.v||0,cd.mat?.u||'kg');vm+=cd.vang?.v||0;km+=cd.kem?.v||0;});
   return{dk,mk,vm,km};
 }
-
 function recalcLive(){
   let dk=0,mk=0,vm=0,km=0;
   trips.forEach(t=>{const r=calcTripTotal(t);dk+=r.dk;mk+=r.mk;vm+=r.vm;km+=r.km;});
@@ -691,49 +872,37 @@ function renderImages(){
   $('#imgPreview').innerHTML=imgFiles.map((f,i)=>`<div class="img-thumb"><img src="${URL.createObjectURL(f)}"><button class="del-img" onclick="removeImage(${i})">×</button></div>`).join('');
 }
 function fileToB64(file){return new Promise(r=>{const rd=new FileReader();rd.onload=e=>r(e.target.result);rd.readAsDataURL(file);});}
-
-// Drag & Drop
 function handleDragOver(e){e.preventDefault();e.stopPropagation();document.getElementById('imgUploadArea').classList.add('drag-over');}
 function handleDragLeave(e){e.preventDefault();document.getElementById('imgUploadArea').classList.remove('drag-over');}
 function handleDrop(e){
   e.preventDefault();e.stopPropagation();
   document.getElementById('imgUploadArea').classList.remove('drag-over');
   const files=e.dataTransfer?.files;
-  if(files&&files.length){const n=addImageFiles(files);if(n>0)showToast(`✅ Đã thêm ${n} ảnh từ kéo thả`);}
+  if(files&&files.length){const n=addImageFiles(files);if(n>0)showToast(`✅ Đã thêm ${n} ảnh`);}
 }
-
-// Paste from clipboard (Ctrl+V anywhere on page)
 function handlePasteGlobal(e){
   if(imgFiles.length>=4)return;
-  const items=e.clipboardData?.items;
-  if(!items)return;
+  const items=e.clipboardData?.items;if(!items)return;
   const imgs=Array.from(items).filter(it=>it.type.startsWith('image/'));
   if(!imgs.length)return;
   e.preventDefault();
   imgs.slice(0,4-imgFiles.length).forEach(it=>{
-    const blob=it.getAsFile();
-    if(blob){
-      // rename with timestamp
-      const ext=blob.type.split('/')[1]||'png';
-      const named=new File([blob],`paste_${Date.now()}.${ext}`,{type:blob.type});
-      imgFiles.push(named);
-    }
+    const blob=it.getAsFile();if(!blob)return;
+    const ext=blob.type.split('/')[1]||'png';
+    imgFiles.push(new File([blob],`paste_${Date.now()}.${ext}`,{type:blob.type}));
   });
   renderImages();
-  // Flash hint
   const hint=document.getElementById('pasteHint');
   if(hint){hint.style.display='block';setTimeout(()=>hint.style.display='none',2000);}
-  showToast(`✅ Đã dán ${imgs.length} ảnh từ clipboard!`);
+  showToast(`✅ Đã dán ${imgs.length} ảnh!`);
 }
 
-// ══════════════════════ SUMMARY ══════════════════════
+// ══════════════════════ SUMMARY & SAVE ══════════════════════
 function openSummary(){
   const note=$('#noteField').value.trim();
   const s=getSettings();
   let dk=0,mk=0,vm=0,km=0;
   trips.forEach(t=>{const r=calcTripTotal(t);dk+=r.dk;mk+=r.mk;vm+=r.vm;km+=r.km;});
-
-  // Per-route section
   let routeBoxes='';
   trips.forEach(trip=>{
     const rName=ROUTE_NAMES[trip.route]||trip.route;
@@ -745,47 +914,23 @@ function openSummary(){
     if(rkm>0)totPills.push(`<span class="scp scp-kem" style="font-weight:700;">🍨 ${fmtN(rkm)} m³</span>`);
     let chRows='';
     CHS.forEach(ch=>{
-      const cd=trip.channels[ch.id]||{};
-      const pills=[];
-      TYPES.forEach(t=>{if(cd[t]&&cd[t].v>0)pills.push(`<span class="scp scp-${t}">${TYPE_ICO[t]} ${TYPE_LBL[t]}: ${fmtN(cd[t].v)} ${cd[t].u}</span>`);} );
+      const cd=trip.channels[ch.id]||{};const pills=[];
+      TYPES.forEach(t=>{if(cd[t]&&cd[t].v>0)pills.push(`<span class="scp scp-${t}">${TYPE_ICO[t]} ${TYPE_LBL[t]}: ${fmtN(cd[t].v)} ${cd[t].u}</span>`);});
       if(!pills.length)return;
       chRows+=`<div class="slip-ch-row"><span class="slip-ch-name">${ch.icon} ${ch.name}</span><div class="slip-ch-pills">${pills.join('')}</div></div>`;
     });
-    routeBoxes+=`<div class="slip-route-box">
-      <div class="slip-route-box-hdr">
-        <span class="slip-route-box-name">🚛 ${rName}</span>
-        <div class="slip-route-totals">${totPills.join('')}</div>
-      </div>
-      <div class="slip-route-box-body">${chRows||'<span style="color:#94a3b8;font-size:11px;">Chưa có dữ liệu</span>'}</div>
-    </div>`;
+    routeBoxes+=`<div class="slip-route-box"><div class="slip-route-box-hdr"><span class="slip-route-box-name">🚛 ${rName}</span><div class="slip-route-totals">${totPills.join('')}</div></div><div class="slip-route-box-body">${chRows||'<span style="color:#94a3b8;font-size:11px;">Chưa có dữ liệu</span>'}</div></div>`;
   });
-
-  // Grand total lines
   const totLines=[];
   if(dk>0)totLines.push(`<div class="slip-total-line"><span class="stl-bullet stl-dong"></span><span class="stl-val">Đông: <strong>${fmtN(dk)} kg</strong></span></div>`);
   if(mk>0)totLines.push(`<div class="slip-total-line"><span class="stl-bullet stl-mat"></span><span class="stl-val">Mát: <strong>${fmtN(mk)} kg</strong></span></div>`);
   if(vm>0)totLines.push(`<div class="slip-total-line"><span class="stl-bullet stl-vang"></span><span class="stl-val">Váng: <strong>${fmtN(vm)} m³</strong></span></div>`);
   if(km>0)totLines.push(`<div class="slip-total-line"><span class="stl-bullet stl-kem"></span><span class="stl-val">Kem: <strong>${fmtN(km)} m³</strong></span></div>`);
-
-  currentEntry={
-    trips:JSON.parse(JSON.stringify(trips)),
-    dk,mk,vm,km,
-    note,pickDate:getPickDate(),pickDateRaw:$('#pickDate').value,
-    user:s.userName||'',timestamp:Date.now()
-  };
-
+  currentEntry={trips:JSON.parse(JSON.stringify(trips)),dk,mk,vm,km,note,pickDate:getPickDate(),user:s.userName||'',timestamp:Date.now()};
   $('#summaryBody').innerHTML=`
-    <div class="slip-meta">
-      <div class="slip-date">📅 ${getPickDate()}</div>
-      ${s.userName?`<div class="slip-user">👤 ${s.userName}</div>`:''}
-    </div>
-    <div class="slip-section-label">Tuyến vận chuyển</div>
-    ${routeBoxes}
-    <div class="slip-total-box">
-      <div class="slip-total-title">📊 Tổng cộng gửi vận tải</div>
-      <div class="slip-total-lines">${totLines.length?totLines.join(''):'<span style="color:#64748b">Chưa có dữ liệu</span>'}</div>
-      ${note?`<div class="slip-note">📝 ${note}</div>`:''}
-    </div>`;
+    <div class="slip-meta"><div class="slip-date">📅 ${getPickDate()}</div>${s.userName?`<div class="slip-user">👤 ${s.userName}</div>`:''}</div>
+    <div class="slip-section-label">Tuyến vận chuyển</div>${routeBoxes}
+    <div class="slip-total-box"><div class="slip-total-title">📊 Tổng cộng gửi vận tải</div><div class="slip-total-lines">${totLines.length?totLines.join(''):'<span style="color:#64748b">Chưa có dữ liệu</span>'}</div>${note?`<div class="slip-note">📝 ${note}</div>`:''}</div>`;
   $('#summaryModal').classList.add('open');
 }
 
@@ -795,7 +940,7 @@ async function saveAndClose(){
   if(!currentEntry){closeModal();return;}
   $('#savingOverlay').classList.add('show');
   try{
-    // Nén ảnh nếu quá lớn để tránh localStorage đầy
+    // Nén ảnh
     const b64Imgs=await Promise.all(imgFiles.map(async f=>{
       if(f.size>500000){
         return new Promise(res=>{
@@ -803,63 +948,42 @@ async function saveAndClose(){
           img.onload=()=>{
             const canvas=document.createElement('canvas');
             const MAX=1200;let w=img.width,h=img.height;
-            if(w>MAX){h=Math.round(h*MAX/w);w=MAX;}
-            if(h>MAX){w=Math.round(w*MAX/h);h=MAX;}
-            canvas.width=w;canvas.height=h;
-            canvas.getContext('2d').drawImage(img,0,0,w,h);
-            URL.revokeObjectURL(url);
-            res({data:canvas.toDataURL('image/jpeg',0.7),type:'image/jpeg',name:f.name});
-          };
-          img.onerror=()=>{URL.revokeObjectURL(url);res(null);};
-          img.src=url;
+            if(w>MAX){h=Math.round(h*MAX/w);w=MAX;}if(h>MAX){w=Math.round(w*MAX/h);h=MAX;}
+            canvas.width=w;canvas.height=h;canvas.getContext('2d').drawImage(img,0,0,w,h);
+            URL.revokeObjectURL(url);res({data:canvas.toDataURL('image/jpeg',0.75),type:'image/jpeg',name:f.name});
+          };img.onerror=()=>{URL.revokeObjectURL(url);res(null);};img.src=url;
         });
       }
       return{data:await fileToB64(f),type:f.type,name:f.name};
     }));
     const validImgs=b64Imgs.filter(Boolean);
-
-    // Lưu entry vào localStorage (KHÔNG lưu ảnh base64 – chỉ lưu link sau khi upload)
-    const entryNoImg={...currentEntry,images:[],imgLinks:[]};
-    const logs=getLogs();logs.unshift(entryNoImg);
-    try{
-      saveLogs(logs);
-    }catch(storageErr){
-      // localStorage đầy → xoá bớt entry cũ
-      const trimmed=logs.slice(0,Math.max(1,logs.length-20));
-      try{saveLogs(trimmed);}catch(e2){
-        $('#savingOverlay').classList.remove('show');
-        showToast('⚠️ Bộ nhớ thiết bị đầy, không thể lưu');return;
-      }
-    }
-
     const s=getSettings();
     if(s.scriptUrl){
-      try{
-        const payload={
-          pickDate:currentEntry.pickDate,user:currentEntry.user,
-          dong_kg:currentEntry.dk,mat_kg:currentEntry.mk,
-          vang_m3:currentEntry.vm,kem_m3:currentEntry.km,
-          routes:(currentEntry.trips||[]).map(t=>t.route).join(', '),
-          note:currentEntry.note,images:validImgs,trips:currentEntry.trips
-        };
-        const res=await fetch(s.scriptUrl,{method:'POST',body:JSON.stringify(payload)});
-        const json=await res.json();
-        if(json.status==='ok'){
-          const saved=getLogs();
-          if(saved[0]&&saved[0].timestamp===currentEntry.timestamp){
-            saved[0].imgLinks=json.links||[];saveLogs(saved);
-          }
-          showToast('✅ Đã lưu Google Sheet!');
-        }else{showToast('✅ Đã lưu cục bộ (Sheet báo lỗi)');}
-      }catch(fetchErr){showToast('✅ Đã lưu cục bộ (mất kết nối)');}
-    }else{showToast('✅ Đã lưu Nhật Ký!');}
+      const groupId=String(currentEntry.timestamp);
+      const payload={
+        groupId,pickDate:currentEntry.pickDate,user:currentEntry.user,
+        note:currentEntry.note,images:validImgs,trips:currentEntry.trips
+      };
+      const res=await fetch(s.scriptUrl,{method:'POST',body:JSON.stringify(payload)});
+      const json=await res.json();
+      if(json.status==='ok'){
+        showToast('✅ Đã lưu lên Google Sheet!');
+        closeModal();resetForm();
+        // Reload từ Sheet
+        setTimeout(()=>loadAndRenderLog(),800);
+        return;
+      }
+    }
+    // Offline fallback
+    const pending={...currentEntry,imgLinks:[],images:[],_pending:true,_groupId:String(currentEntry.timestamp)};
+    _pendingLocal.unshift(pending);savePending(_pendingLocal);
+    showToast('✅ Đã lưu cục bộ (sẽ sync khi có mạng)');
   }catch(err){
-    showToast('❌ Lỗi lưu: '+err.message);
-    console.error('saveAndClose:',err);
-  }finally{
-    $('#savingOverlay').classList.remove('show');
-  }
-  closeModal();resetForm();renderLog();
+    const pending={...currentEntry,imgLinks:[],images:[],_pending:true};
+    _pendingLocal.unshift(pending);savePending(_pendingLocal);
+    showToast('✅ Đã lưu cục bộ');
+  }finally{$('#savingOverlay').classList.remove('show');}
+  closeModal();resetForm();renderLog(_sheetCache.concat(_pendingLocal));
 }
 
 function resetForm(){
@@ -868,381 +992,46 @@ function resetForm(){
   currentEntry=null;
 }
 
-// ══════════════════════ TEXT / SHARE ══════════════════════
+// ══════════════════════ SYNC BUTTON ══════════════════════
+function syncFromSheet(){loadAndRenderLog();}
+
+// ══════════════════════ TEXT/PRINT ══════════════════════
 function buildText(entry){
   const e=entry||currentEntry;if(!e)return'';
   const lines=[`🚛 NHẤT LÂM BOOK TẢI`,`📅 Lấy hàng ngày: ${e.pickDate}`,`─────────────────────`];
   (e.trips||[]).forEach(trip=>{
     const rName=ROUTE_NAMES[trip.route]||trip.route;
     lines.push(`🚛 ${rName}:`);
-    CHS.forEach(ch=>{
-      const cd=trip.channels[ch.id]||{};
-      const items=[];
-      TYPES.forEach(t=>{if(cd[t]&&cd[t].v>0)items.push(`    ${TYPE_ICO[t]} ${TYPE_LBL[t]}: ${fmtN(cd[t].v)} ${cd[t].u}`);} );
-      if(!items.length)return;
-      lines.push(`  ${ch.icon} ${ch.name}:`);lines.push(...items);
-    });
+    const dk=trip.dk||0,mk=trip.mk||0,vm=trip.vm||0,km=trip.km||0;
+    if(dk>0)lines.push(`  ❄️ Đông: ${fmtN(dk)} kg`);if(mk>0)lines.push(`  🌡 Mát: ${fmtN(mk)} kg`);
+    if(vm>0)lines.push(`  🍦 Váng: ${fmtN(vm)} m³`);if(km>0)lines.push(`  🍨 Kem: ${fmtN(km)} m³`);
   });
-  lines.push(`─────────────────────`,`📊 TỔNG:`);
-  if(e.dk>0)lines.push(`  ❄️ Đông: ${fmtN(e.dk)} kg`);
-  if(e.mk>0)lines.push(`  🌡 Mát: ${fmtN(e.mk)} kg`);
-  if(e.vm>0)lines.push(`  🍦 Váng: ${fmtN(e.vm)} m³`);
-  if(e.km>0)lines.push(`  🍨 Kem: ${fmtN(e.km)} m³`);
-  if(e.note){lines.push(`─────────────────────`);lines.push(`📝 ${e.note}`);}
+  if(e.note){lines.push('─────────────────────');lines.push(`📝 ${e.note}`);}
   return lines.join('\n');
 }
 function copyText(){navigator.clipboard.writeText(buildText()).then(()=>showToast('✅ Đã sao chép!'));}
-function shareZalo(){const txt=buildText();if(navigator.share)navigator.share({title:'Nhất Lâm Book Tải',text:txt});else navigator.clipboard.writeText(txt).then(()=>showToast('✅ Đã copy! Dán vào Zalo.'));}
-function doPrint(){
-  const logo=`data:image/webp;base64,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`;
-  const footer=`data:image/webp;base64,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`;
-  const body=$('#summaryBody').innerHTML;
-  const w=window.open('','_blank','width=640,height=900');
-  w.document.write(`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Nhất Lâm Book Tải</title>
-  <link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;600;700;800&display=swap" rel="stylesheet">
-  <style>body{background:#fff;color:#1e293b;font-family:'Be Vietnam Pro',sans-serif;margin:0;}
-  .modal-header{background:linear-gradient(135deg,#1e3a5f,#1e4976);padding:14px 18px;display:flex;align-items:center;gap:12px;}
-  .modal-header img{height:42px;}.modal-header-title{font-size:15px;color:#f59e0b;font-weight:800;letter-spacing:2px;}.modal-header-sub{font-size:11px;color:#94a3b8;}
-  .booking-slip{padding:14px 18px;}
-  .slip-meta{background:#f0f6ff;border:1px solid #bfdbfe;border-radius:9px;padding:11px 13px;margin-bottom:12px;}
-  .slip-date{font-size:20px;font-weight:800;color:#1e3a5f;margin-bottom:3px;}.slip-user{font-size:12px;color:#64748b;}
-  .slip-section-label{font-size:10px;font-weight:800;letter-spacing:2px;color:#64748b;text-transform:uppercase;margin:10px 0 6px;display:flex;align-items:center;gap:8px;}
-  .slip-section-label::after{content:'';flex:1;height:1px;background:#d0dae6;}
-  .slip-route-box{border:1.5px solid #d0dae6;border-radius:9px;overflow:hidden;margin-bottom:8px;}
-  .slip-route-box-hdr{background:linear-gradient(135deg,#1e3a5f,#1e4976);padding:8px 13px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:6px;}
-  .slip-route-box-name{font-size:13px;font-weight:700;color:#fff;}
-  .slip-route-totals{display:flex;gap:4px;flex-wrap:wrap;}
-  .slip-route-box-body{padding:8px 13px;background:#f8fafc;}
-  .slip-ch-row{display:flex;align-items:center;gap:6px;padding:3px 0;border-bottom:1px solid #f1f5f9;}.slip-ch-row:last-child{border-bottom:none;}
-  .slip-ch-name{font-size:10px;font-weight:400;color:#94a3b8;min-width:100px;flex-shrink:0;}
-  .slip-ch-pills{display:flex;flex-wrap:wrap;gap:3px;}
-  .scp{font-size:10px;font-weight:400;padding:1px 7px;border-radius:6px;}
-  .scp-dong{background:#e0f2fe;color:#0369a1;}.scp-mat{background:#fff7ed;color:#c2410c;}.scp-vang{background:#f3e8ff;color:#6d28d9;}.scp-kem{background:#ecfdf5;color:#065f46;}
-  .slip-total-box{background:#fff;border:2px solid #1e3a5f;border-radius:11px;padding:13px 16px;margin-top:12px;position:relative;overflow:hidden;}
-  .slip-total-box::before{content:'';position:absolute;top:0;left:0;right:0;height:3px;background:linear-gradient(90deg,#1e3a5f,#0284c7,#f59e0b);}
-  .slip-total-title{font-size:10px;letter-spacing:2.5px;color:#64748b;font-weight:600;margin-bottom:9px;text-transform:uppercase;}
-  .slip-total-lines{display:flex;flex-direction:column;gap:6px;}
-  .slip-total-line{display:flex;align-items:center;gap:9px;font-size:15px;}
-  .stl-bullet{width:9px;height:9px;border-radius:50%;flex-shrink:0;}
-  .stl-dong{background:#0284c7;}.stl-mat{background:#ea580c;}.stl-vang{background:#7c3aed;}.stl-kem{background:#059669;}
-  .stl-val{color:#1e293b;}.stl-val strong{font-weight:800;color:#1e3a5f;font-size:16px;}
-  .slip-note{margin-top:9px;background:#f8fafc;border-left:3px solid #cbd5e1;padding:7px 11px;font-size:12px;color:#64748b;border-radius:0 7px 7px 0;}
-  .action-row,.btn-save-log{display:none!important;}
-  </style></head><body>
-  <div class="modal-header"><img src="${logo}"><div><div class="modal-header-title">NHẤT LÂM – BOOK TẢI</div><div class="modal-header-sub">www.nhatlamgroup.vn</div></div></div>
-  <div class="booking-slip">${body}</div>
-  <div><img style="width:100%;filter:brightness(1.15);" src="${footer}"></div>
-  </body></html>`);
-  w.document.close();setTimeout(()=>w.print(),700);
-}
+function shareZalo(){const txt=buildText();if(navigator.share)navigator.share({title:'Nhất Lâm',text:txt});else navigator.clipboard.writeText(txt).then(()=>showToast('✅ Đã copy! Dán vào Zalo.'));}
 
-// ══════════════════════ SYNC FROM SHEET ══════════════════════
-async function syncFromSheet(){
-  const s=getSettings();
-  if(!s.scriptUrl){showToast('⚠️ Chưa cài Script URL trong Cài Đặt');return;}
-  const btn=document.getElementById('btnSyncSheet');
-  const status=document.getElementById('syncStatus');
-  btn.textContent='⏳ Đang tải...';btn.disabled=true;
-  status.style.display='block';status.textContent='☁️ Đang tải dữ liệu từ Google Sheet...';
-  try{
-    const res=await fetch(s.scriptUrl+'?action=getLogs&limit=200',{method:'GET'});
-    const json=await res.json();
-    if(json.status==='ok'&&Array.isArray(json.rows)&&json.rows.length){
-      const localLogs=getLogs();let added=0;
-      const newEntries=json.rows.map(sheetRowToEntry).filter(Boolean);
-      const merged=mergeSheetEntries(newEntries);
-      const existingKeys=new Set(localLogs.map(e=>e._rowKey||'').filter(Boolean));
-      merged.forEach(entry=>{
-        const isDup=entry._rowKey&&existingKeys.has(entry._rowKey);
-        const isTSDup=!entry._rowKey&&localLogs.some(e=>Math.abs((e.timestamp||0)-entry.timestamp)<60000&&e.user===entry.user);
-        if(!isDup&&!isTSDup){localLogs.push(entry);added++;}
-        else if(entry._rowKey&&existingKeys.has(entry._rowKey)){
-          const idx=localLogs.findIndex(e=>e._rowKey===entry._rowKey);
-          if(idx>=0){
-            const rKey=entry.trips[0]?.route;
-            if(rKey&&entry[`act_${rKey}`])localLogs[idx][`act_${rKey}`]=entry[`act_${rKey}`];
-            if(entry.imgLinks?.length)localLogs[idx].imgLinks=entry.imgLinks;
-          }
-        }
-      });
-      localLogs.sort((a,b)=>(b.timestamp||0)-(a.timestamp||0));
-      saveLogs(localLogs);renderLog();
-      const msg=added>0?`✅ Đã đồng bộ ${added} mục mới từ Sheet!`:'✅ Dữ liệu đã cập nhật, không có mục mới.';
-      status.textContent=msg;showToast(msg);
-    }else if(json.status==='ok'){
-      status.textContent='ℹ️ Sheet chưa có dữ liệu hoặc chưa cập nhật GAS mới.';
-      showToast('ℹ️ Sheet chưa có dữ liệu để đồng bộ');
-    }else{
-      status.textContent='⚠️ Lỗi: '+(json.msg||'Không rõ');
-      showToast('⚠️ Lỗi khi đồng bộ');
-    }
-  }catch(err){
-    status.textContent='⚠️ Không kết nối được: '+err.message;
-    showToast('⚠️ Không kết nối được Sheet');
-  }finally{
-    btn.textContent='☁️ Đồng Bộ Sheet';btn.disabled=false;
-    setTimeout(()=>{status.style.display='none';},5000);
-  }
-}
-
-
-function renderLog(){
-  const logs=getLogs();
-  const q=($('#logSearch')?.value||'').toLowerCase();
-  const filtered=q?logs.filter(e=>(e.pickDate||'').toLowerCase().includes(q)||(e.note||'').toLowerCase().includes(q)||(e.trips||[]).some(t=>(ROUTE_NAMES[t.route]||'').toLowerCase().includes(q))):logs;
-  const cont=$('#logList');
-  if(!filtered.length){cont.innerHTML=`<div class="log-empty">📂<br>Chưa có nhật ký${q?' phù hợp':''}</div>`;return;}
-  cont.innerHTML=filtered.map(e=>{
-    const realIdx=logs.indexOf(e);
-    const ts=e.timestamp?new Date(e.timestamp).toLocaleTimeString('vi-VN'):'';
-    const routeCards=(e.trips||[]).map(trip=>buildLogRouteCard(e,realIdx,trip)).join('');
-    // ✅ Hiển thị ảnh từ imgLinks (link Drive) HOẶC images[] (base64 cục bộ)
-    const allImgSrcs=[];
-    (e.imgLinks||[]).forEach(lnk=>{if(lnk)allImgSrcs.push({src:lnk,href:lnk});});
-    if(!allImgSrcs.length)(e.images||[]).forEach(img=>{if(img?.data)allImgSrcs.push({src:img.data,href:img.data});});
-    const imgHtml=allImgSrcs.map(({src,href})=>`<img class="log-img-thumb" style="width:60px;height:60px;border-radius:6px;object-fit:cover;border:1.5px solid var(--border);cursor:pointer;margin:2px;" src="${href}" onerror="this.style.display='none'" onclick="window.open('${href}','_blank')">`).join('');
-    return `<div class="log-group">
-      <div class="log-group-date">📅 ${e.pickDate||'---'} · ${ts} · 👤 ${e.user||'---'}</div>
-      ${routeCards}
-      ${imgHtml?`<div style="display:flex;flex-wrap:wrap;gap:4px;padding:0 4px 8px;">${imgHtml}</div>`:''}
-      ${e.note?`<div style="font-size:12px;color:var(--muted);background:#f8fafc;padding:7px 10px;border-radius:6px;margin-bottom:6px;">📝 ${e.note}</div>`:''}
-    </div>`;
-  }).join('');
-}
-
-function buildLogRouteCard(e,eIdx,trip){
-  const rName=ROUTE_NAMES[trip.route]||trip.route;
-  const status=e[`st_${trip.route}`]||'none';
-  const sbCls=status==='paid'?'lsb-paid':status==='filed'?'lsb-filed':'lsb-none';
-  const sbTxt=status==='paid'?'✅ Đã thanh toán':status==='filed'?'📋 Đã lập hồ sơ':'⏳ Chờ xử lý';
-  const cardCls=status==='paid'?'status-paid':status==='filed'?'status-filed':'';
-
-  // subtotals for header
-  // ✅ Với entry từ Sheet (_fromSheet): lấy số từ channel tong-sheet hoặc dk/mk/vm/km trực tiếp
-  let dk=0,mk=0,vm=0,km=0;
-  const allChKeys=Object.keys(trip.channels||{});
-  if(allChKeys.includes('tong-sheet')){
-    // Entry đồng bộ từ Sheet → dùng trực tiếp từ channel tổng
-    const cd=trip.channels['tong-sheet'];
-    dk=toKg(cd.dong?.v||0,cd.dong?.u||'kg');
-    mk=toKg(cd.mat?.v||0,cd.mat?.u||'kg');
-    vm=cd.vang?.v||0;
-    km=cd.kem?.v||0;
-  } else {
-    // Entry từ Book Tải cục bộ → tính từ tất cả kênh
-    CHS.forEach(ch=>{const cd=trip.channels[ch.id]||{};dk+=toKg(cd.dong?.v||0,cd.dong?.u||'kg');mk+=toKg(cd.mat?.v||0,cd.mat?.u||'kg');vm+=cd.vang?.v||0;km+=cd.kem?.v||0;});
-  }
-
-  // channel detail (collapse)
-  const detailId=`det-${eIdx}-${trip.route.replace(/-/g,'_')}`;
-  let chDetail='';
-  if(allChKeys.includes('tong-sheet')){
-    // Entry từ Sheet: hiển thị 1 dòng tổng hợp thay vì từng kênh
-    chDetail=`<div class="log-ch-row-detail" style="background:#fffbeb;border-radius:6px;padding:5px 8px;">
-      <div class="log-ch-name-d" style="color:#92400e;font-weight:700;">📊 Số liệu từ Sheet</div>
-      <div class="log-ch-pills-d">
-        ${dk>0?`<span class="scp scp-dong">❄️ Đông: ${fmtN(dk)} kg</span>`:''}
-        ${mk>0?`<span class="scp scp-mat">🌡 Mát: ${fmtN(mk)} kg</span>`:''}
-        ${vm>0?`<span class="scp scp-vang">🍦 Váng: ${fmtN(vm)} m³</span>`:''}
-        ${km>0?`<span class="scp scp-kem">🍨 Kem: ${fmtN(km)} m³</span>`:''}
-      </div>
-    </div>`;
-  } else {
-    CHS.forEach(ch=>{
-      const cd=trip.channels[ch.id]||{};
-      const pills=[];
-      TYPES.forEach(t=>{if(cd[t]&&cd[t].v>0)pills.push(`<span class="scp scp-${t}">${TYPE_ICO[t]} ${TYPE_LBL[t]}: ${fmtN(cd[t].v)} ${cd[t].u}</span>`);});
-      if(!pills.length)return;
-      chDetail+=`<div class="log-ch-row-detail"><div class="log-ch-name-d">${ch.icon} ${ch.name}</div><div class="log-ch-pills-d">${pills.join('')}</div></div>`;
-    });
-  }
-
-  // Quy đổi: 1 m³ = 333 kg
-  const M3_TO_KG=333;
-  const vangKg=vm*M3_TO_KG;
-  const kemKg=km*M3_TO_KG;
-  const tongKg=dk+mk+vangKg+kemKg;
-
-  // Nếu đã nhập thực tế → dùng số thực tế cho pill tổng
-  const actual=e[`act_${trip.route}`]||{};
-  const hasActual=actual.dong||actual.mat||actual.vang||actual.kem;
-  const disDk=hasActual?(actual.dong||dk):dk;
-  const disMk=hasActual?(actual.mat||mk):mk;
-  const disVm=hasActual?(actual.vang||vm):vm;
-  const disKm=hasActual?(actual.kem||km):km;
-  const disTongKg=disDk+disMk+(disVm*M3_TO_KG)+(disKm*M3_TO_KG);
-
-  const hdrPills=[];
-  if(disDk>0)hdrPills.push(`<span class="log-total-pill ltp-dong">❄️ ${fmtN(disDk)} kg${hasActual&&actual.dong?'*':''}</span>`);
-  if(disMk>0)hdrPills.push(`<span class="log-total-pill ltp-mat">🌡 ${fmtN(disMk)} kg${hasActual&&actual.mat?'*':''}</span>`);
-  if(disVm>0)hdrPills.push(`<span class="log-total-pill ltp-vang">🍦 ${fmtN(disVm)} m³${hasActual&&actual.vang?'*':''}</span>`);
-  if(disKm>0)hdrPills.push(`<span class="log-total-pill ltp-kem">🍨 ${fmtN(disKm)} m³${hasActual&&actual.kem?'*':''}</span>`);
-  if(disTongKg>0&&(disVm>0||disKm>0)){
-    hdrPills.push(`<span class="log-total-pill" style="background:#1e3a5f;color:#f59e0b;border:1px solid rgba(245,158,11,.4);font-size:10px;" title="Tổng quy đổi${hasActual?' (thực tế)':' (đặt)'}">📊 ${fmtN(Math.round(disTongKg))} kg${hasActual?'*':''}</span>`);
-  }
-
-  // actual comparison (actual/hasActual already computed above)
-  let actualHtml='';
-  if(hasActual){
-    const rows=TYPES.map(t=>{
-      const bk=t==='dong'?dk:t==='mat'?mk:t==='vang'?vm:km;
-      const ac=actual[t]||0;
-      const unit=t==='vang'||t==='kem'?'m³':'kg';
-      if(!bk&&!ac)return'';
-      const diff=ac-bk;
-      const diffEl=diff===0?`<span class="lcr-same">= đúng</span>`:diff>0?`<span class="lcr-pos">+${fmtN(diff)}</span>`:`<span class="lcr-neg">${fmtN(diff)}</span>`;
-      return `<div class="log-compare-row"><span class="lcr-label">${TYPE_ICO[t]} ${TYPE_LBL[t]}</span><span class="lcr-book">${fmtN(bk)} ${unit}</span><span>→</span><span class="lcr-actual">${fmtN(ac)} ${unit}</span>${diffEl}</div>`;
-    }).filter(Boolean).join('');
-    actualHtml=`<div class="log-actual"><div class="log-actual-hdr"><span>📦 SỐ THỰC TẾ</span><button class="log-actual-edit-btn" onclick="openActualEdit(${eIdx},'${trip.route}')">✏️ Cập nhật</button></div>${rows}</div>`;
-  }else{
-    actualHtml=`<div class="log-actual"><div class="log-actual-hdr"><span>📦 SỐ THỰC TẾ</span><button class="log-actual-edit-btn" onclick="openActualEdit(${eIdx},'${trip.route}')">+ Nhập số thực tế</button></div><span class="log-actual-empty">Chưa nhập số thực tế</span></div>`;
-  }
-
-  // Tổng quy đổi summary box
-  // Tổng quy đổi: dùng thực tế nếu đã nhập
-  let totalSummaryHtml='';
-  const showDk=hasActual?(actual.dong||dk):dk;
-  const showMk=hasActual?(actual.mat||mk):mk;
-  const showVm=hasActual?(actual.vang||vm):vm;
-  const showKm=hasActual?(actual.kem||km):km;
-  const showVangKg=showVm*M3_TO_KG;
-  const showKemKg=showKm*M3_TO_KG;
-  const showTong=showDk+showMk+showVangKg+showKemKg;
-  if(showTong>0&&(showVm>0||showKm>0)){
-    const label=hasActual?'📊 TỔNG THỰC TẾ':'📊 TỔNG QUY ĐỔI';
-    const parts=[];
-    if(showDk>0)parts.push(`❄️ ${fmtN(showDk)}`);
-    if(showMk>0)parts.push(`🌡 ${fmtN(showMk)}`);
-    if(showVm>0)parts.push(`🍦 ${fmtN(showVm)}m³×333=${fmtN(Math.round(showVangKg))}`);
-    if(showKm>0)parts.push(`🍨 ${fmtN(showKm)}m³×333=${fmtN(Math.round(showKemKg))}`);
-    totalSummaryHtml=`<div style="background:linear-gradient(135deg,#1e3a5f,#1e4976);border-radius:8px;padding:8px 12px;margin-top:8px;display:flex;align-items:center;flex-wrap:wrap;gap:6px;">
-      <span style="font-size:10px;letter-spacing:1.5px;color:#94a3b8;font-weight:700;flex-shrink:0;">${label}</span>
-      <span style="font-size:10px;color:#cbd5e1;flex:1;">${parts.join(' + ')} kg</span>
-      <span style="font-size:14px;font-weight:800;color:#f59e0b;">${fmtN(Math.round(showTong))} kg</span>
-    </div>`;
-  }
-
-  return `<div class="log-card ${cardCls}">
-    <div class="log-card-hdr" onclick="toggleChDetail('${detailId}')">
-      <span class="log-route-badge">🚛 ${rName}</span>
-      <span class="log-status-badge ${sbCls}">${sbTxt}</span>
-      <div class="log-totals-hdr">${hdrPills.join('')}</div>
-      <span style="font-size:11px;color:var(--muted2);margin-left:4px;">▼</span>
-    </div>
-    <div class="log-ch-detail" id="${detailId}">${chDetail||'<span style="color:var(--muted2);font-size:12px;">Không có dữ liệu kênh</span>'}</div>
-    <div class="log-card-body">${totalSummaryHtml}${actualHtml}</div>
-    <div class="log-card-footer">
-      <button class="btn-ls btn-ls-filed ${status==='filed'||status==='paid'?'on':''}" onclick="toggleStatus(${eIdx},'${trip.route}','filed')">📋 Hồ Sơ</button>
-      <button class="btn-ls btn-ls-paid ${status==='paid'?'on':''}" onclick="toggleStatus(${eIdx},'${trip.route}','paid')">✅ TT</button>
-      <span class="log-ftr-spacer"></span>
-      <button class="btn-ls btn-ls-share" onclick="shareTripLog(${eIdx},'${trip.route}')">💬</button>
-      <button class="btn-ls btn-ls-edit" onclick="openEditLog(${eIdx})">✏️</button>
-      <button class="btn-ls btn-ls-del" onclick="deleteEntry(${eIdx})">🗑️</button>
-    </div>
-  </div>`;
-}
-
-function toggleChDetail(id){
-  const el=document.getElementById(id);
-  if(el)el.classList.toggle('open');
-}
-
-function toggleStatus(eIdx,routeKey,newStatus){
-  const logs=getLogs();const e=logs[eIdx];
-  const key=`st_${routeKey}`;
-  e[key]=e[key]===newStatus?'none':newStatus;
-  saveLogs(logs);renderLog();
-  showToast(e[key]==='paid'?'✅ Đã thanh toán':e[key]==='filed'?'📋 Đã lập hồ sơ':'↩️ Đã bỏ trạng thái');
-}
-
-function deleteEntry(idx){if(!confirm('Xoá mục này?'))return;const logs=getLogs();logs.splice(idx,1);saveLogs(logs);renderLog();showToast('🗑️ Đã xoá');}
-
-function shareTripLog(eIdx,routeKey){
-  const e=getLogs()[eIdx];
-  const trip=(e.trips||[]).find(t=>t.route===routeKey);
-  if(!trip){navigator.clipboard.writeText(buildText(e)).then(()=>showToast('✅ Đã copy!'));return;}
-  const rName=ROUTE_NAMES[trip.route]||trip.route;
-  const lines=[`🚛 NHẤT LÂM BOOK TẢI`,`📅 ${e.pickDate}`,`🗺 Tuyến: ${rName}`,`─────────────────────`];
-  CHS.forEach(ch=>{const cd=trip.channels[ch.id]||{};const items=[];TYPES.forEach(t=>{if(cd[t]&&cd[t].v>0)items.push(`  ${TYPE_ICO[t]} ${TYPE_LBL[t]}: ${fmtN(cd[t].v)} ${cd[t].u}`);});if(!items.length)return;lines.push(`${ch.icon} ${ch.name}:`);lines.push(...items);});
-  const txt=lines.join('\n');
-  if(navigator.share)navigator.share({title:'Nhất Lâm Book Tải',text:txt});
-  else navigator.clipboard.writeText(txt).then(()=>showToast('✅ Đã copy!'));
-}
-
-// ══════════════════════ ACTUAL EDIT ══════════════════════
-let _actIdx=-1,_actRoute='';
-function openActualEdit(eIdx,routeKey){
-  _actIdx=eIdx;_actRoute=routeKey;
-  const logs=getLogs();const e=logs[eIdx];
-  const trip=(e.trips||[]).find(t=>t.route===routeKey)||{};
-  const actual=e[`act_${routeKey}`]||{};
-  let dk=0,mk=0,vm=0,km=0;
-  // _fromSheet entries use tong-sheet channel
-  if(trip.channels&&trip.channels['tong-sheet']){
-    const cd=trip.channels['tong-sheet'];
-    dk=toKg(cd.dong?.v||0,cd.dong?.u||'kg');
-    mk=toKg(cd.mat?.v||0,cd.mat?.u||'kg');
-    vm=cd.vang?.v||0;km=cd.kem?.v||0;
-  } else {
-    CHS.forEach(ch=>{const cd=trip.channels?.[ch.id]||{};dk+=toKg(cd.dong?.v||0,cd.dong?.u||'kg');mk+=toKg(cd.mat?.v||0,cd.mat?.u||'kg');vm+=cd.vang?.v||0;km+=cd.kem?.v||0;});
-  }
-  const booked={dong:dk,mat:mk,vang:vm,kem:km};
-  const rName=ROUTE_NAMES[routeKey]||routeKey;
-  const rows=TYPES.map(t=>`<div class="edit-cargo-row">
-    <span class="edit-type-lbl">${TYPE_ICO[t]} ${TYPE_LBL[t]}</span>
-    <input type="number" min="0" step="0.01" id="act-${t}" placeholder="${fmtN(booked[t])} (đặt)" value="${actual[t]||''}">
-    <span style="font-size:12px;color:var(--muted);">${t==='vang'||t==='kem'?'m³':'kg'}</span>
-  </div>`).join('');
-  $('#editModalTitle').textContent=`📦 Số thực tế – ${rName}`;
-  $('#editBody').innerHTML=`<div style="background:#f0f6ff;border-radius:8px;padding:10px;font-size:12px;color:#1e4976;margin-bottom:12px;">Nhập số <strong>thực tế</strong> sau khi bốc hàng. Để trống = giữ số đặt.</div>${rows}`;
-  $('#saveEditBtn').onclick=saveActualEdit;
-  $('#editModal').classList.add('open');
-}
-async function saveActualEdit(){
-  if(_actIdx<0)return;
-  const logs=getLogs();
-  const actual={
-    dong:parseFloat($('#act-dong')?.value)||0,
-    mat:parseFloat($('#act-mat')?.value)||0,
-    vang:parseFloat($('#act-vang')?.value)||0,
-    kem:parseFloat($('#act-kem')?.value)||0
-  };
-  logs[_actIdx][`act_${_actRoute}`]=actual;
-  saveLogs(logs);closeEdit();renderLog();showToast('✅ Đã lưu số thực tế');
-  // Đồng bộ actual lên Sheet
-  const s=getSettings();
-  if(s.scriptUrl&&logs[_actIdx]._rowKey){
-    try{
-      const payload={
-        action:'updateActual',rowKey:logs[_actIdx]._rowKey,
-        route:_actRoute,act_dong:actual.dong,act_mat:actual.mat,
-        act_vang:actual.vang,act_kem:actual.kem
-      };
-      fetch(s.scriptUrl,{method:'POST',body:JSON.stringify(payload)}).catch(()=>{});
-    }catch(e){}
-  }
-}
-
-// ══════════════════════ EDIT LOG ══════════════════════
+// ══════════════════════ EDIT LOG (chỉ offline) ══════════════════════
 function openEditLog(eIdx){
+  const allEntries=_sheetCache.concat(_pendingLocal);
+  const e=allEntries[eIdx];if(!e)return;
+  if(e._fromSheet){showToast('ℹ️ Entry từ Sheet, chỉnh sửa tại Sheet');return;}
   editIndex=eIdx;
-  const e=getLogs()[eIdx];
   $('#editModalTitle').textContent='✏️ Chỉnh Sửa Nhật Ký';
-  $('#editBody').innerHTML=`<div class="grid2" style="margin-bottom:12px">
-    <div><label>📅 Ngày</label><input type="text" id="edit-date" value="${e.pickDate||''}"></div>
-    <div><label>📝 Ghi chú</label><input type="text" id="edit-note" value="${e.note||''}"></div>
-  </div>`;
+  $('#editBody').innerHTML=`<div class="grid2" style="margin-bottom:12px"><div><label>📅 Ngày</label><input type="text" id="edit-date" value="${e.pickDate||''}"></div><div><label>📝 Ghi chú</label><input type="text" id="edit-note" value="${e.note||''}"></div></div>`;
   $('#saveEditBtn').onclick=saveEditLog;
   $('#editModal').classList.add('open');
 }
 function saveEditLog(){
   if(editIndex<0)return;
-  const logs=getLogs();
-  logs[editIndex].pickDate=$('#edit-date').value;
-  logs[editIndex].note=$('#edit-note').value;
-  saveLogs(logs);closeEdit();renderLog();showToast('✅ Đã lưu');
+  const allEntries=_sheetCache.concat(_pendingLocal);
+  const e=allEntries[editIndex];
+  if(!e)return;
+  const pi=_pendingLocal.findIndex(p=>p===e);
+  if(pi>=0){_pendingLocal[pi].pickDate=$('#edit-date').value;_pendingLocal[pi].note=$('#edit-note').value;savePending(_pendingLocal);}
+  closeEdit();renderLog(allEntries);showToast('✅ Đã lưu');
 }
-
 function closeEdit(){
   $('#editModal').classList.remove('open');
   editIndex=-1;_actIdx=-1;_actRoute='';
@@ -1250,12 +1039,43 @@ function closeEdit(){
   $('#editModalTitle').textContent='✏️ Chỉnh Sửa';
 }
 
-// ══════════════════════ MISC ══════════════════════
+function doPrint(){
+  const logo=document.querySelector('.hdr-logo img')?.src||'';
+  const body=$('#summaryBody').innerHTML;
+  const w=window.open('','_blank','width=640,height=900');
+  w.document.write(`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Nhất Lâm Book Tải</title>
+  <link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;600;700;800&display=swap" rel="stylesheet">
+  <style>body{background:#fff;color:#1e293b;font-family:'Be Vietnam Pro',sans-serif;margin:0;}
+  .modal-header{background:linear-gradient(135deg,#1e3a5f,#1e4976);padding:14px 18px;display:flex;align-items:center;gap:12px;}
+  .modal-header img{height:42px;}.modal-header-title{font-size:15px;color:#f59e0b;font-weight:800;letter-spacing:2px;}.modal-header-sub{font-size:11px;color:#94a3b8;}
+  .booking-slip{padding:14px 18px;}.slip-meta{background:#f0f6ff;border:1px solid #bfdbfe;border-radius:9px;padding:11px 13px;margin-bottom:12px;}
+  .slip-date{font-size:20px;font-weight:800;color:#1e3a5f;margin-bottom:3px;}.slip-user{font-size:12px;color:#64748b;}
+  .slip-section-label{font-size:10px;font-weight:800;letter-spacing:2px;color:#64748b;text-transform:uppercase;margin:10px 0 6px;display:flex;align-items:center;gap:8px;}
+  .slip-section-label::after{content:'';flex:1;height:1px;background:#d0dae6;}
+  .slip-route-box{border:1.5px solid #d0dae6;border-radius:9px;overflow:hidden;margin-bottom:8px;}
+  .slip-route-box-hdr{background:linear-gradient(135deg,#1e3a5f,#1e4976);padding:8px 13px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:6px;}
+  .slip-route-box-name{font-size:13px;font-weight:700;color:#fff;}.slip-route-totals{display:flex;gap:4px;flex-wrap:wrap;}
+  .slip-route-box-body{padding:8px 13px;background:#f8fafc;}
+  .slip-ch-row{display:flex;align-items:center;gap:6px;padding:3px 0;border-bottom:1px solid #f1f5f9;}.slip-ch-row:last-child{border-bottom:none;}
+  .slip-ch-name{font-size:10px;color:#94a3b8;min-width:100px;flex-shrink:0;}.slip-ch-pills{display:flex;flex-wrap:wrap;gap:3px;}
+  .scp{font-size:10px;padding:1px 7px;border-radius:6px;}
+  .scp-dong{background:#e0f2fe;color:#0369a1;}.scp-mat{background:#fff7ed;color:#c2410c;}.scp-vang{background:#f3e8ff;color:#6d28d9;}.scp-kem{background:#ecfdf5;color:#065f46;}
+  .slip-total-box{background:#fff;border:2px solid #1e3a5f;border-radius:11px;padding:13px 16px;margin-top:12px;position:relative;overflow:hidden;}
+  .slip-total-box::before{content:'';position:absolute;top:0;left:0;right:0;height:3px;background:linear-gradient(90deg,#1e3a5f,#0284c7,#f59e0b);}
+  .slip-total-title{font-size:10px;letter-spacing:2.5px;color:#64748b;font-weight:600;margin-bottom:9px;text-transform:uppercase;}
+  .slip-total-lines{display:flex;flex-direction:column;gap:6px;}.slip-total-line{display:flex;align-items:center;gap:9px;font-size:15px;}
+  .stl-bullet{width:9px;height:9px;border-radius:50%;flex-shrink:0;}.stl-dong{background:#0284c7;}.stl-mat{background:#ea580c;}.stl-vang{background:#7c3aed;}.stl-kem{background:#059669;}
+  .stl-val{color:#1e293b;}.stl-val strong{font-weight:800;color:#1e3a5f;font-size:16px;}
+  .slip-note{margin-top:9px;background:#f8fafc;border-left:3px solid #cbd5e1;padding:7px 11px;font-size:12px;color:#64748b;border-radius:0 7px 7px 0;}
+  .action-row,.btn-save-log{display:none!important;}</style></head><body>
+  <div class="modal-header"><img src="${logo}"><div><div class="modal-header-title">NHẤT LÂM – BOOK TẢI</div><div class="modal-header-sub">www.nhatlamgroup.vn</div></div></div>
+  <div class="booking-slip">${body}</div></body></html>`);
+  w.document.close();setTimeout(()=>w.print(),700);
+}
+
 function copyScript(){navigator.clipboard.writeText($('#scriptCode').textContent).then(()=>showToast('✅ Đã copy!'));}
 function showToast(m){const t=$('#toast');t.textContent=m;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),2800);}
 $('#imgInput').addEventListener('click',e=>e.stopPropagation());
-// Global paste listener — Ctrl+V để dán ảnh từ clipboard
 document.addEventListener('paste',handlePasteGlobal);
 </script>
 </body>
-</html>
