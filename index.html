@@ -861,7 +861,7 @@ window.addEventListener('DOMContentLoaded',()=>{
   if(/Android|iPhone|iPad/i.test(navigator.userAgent))$('#btnPrint').style.display='none';
   // 1 handler duy nhất cho nút Lưu - không bị cloneNode phá
   document.getElementById('saveEditBtn').addEventListener('click', function(){
-    if(_currentSaveAction==='actual') saveActualEdit();
+    if(_currentSaveAction==='combined') saveCombinedEdit();
     else if(_currentSaveAction==='invoice') saveInvoiceEdit();
     else if(_currentSaveAction==='editlog') saveEditLog();
   });
@@ -952,15 +952,17 @@ function parseSheetRows(rows){
     const actKem=parseFloat(row[16])||0;
     const groupId=String(row[17]||'');
     const sheetStatus=String(row[18]||'none').trim(); // 'none'|'filed'|'paid'
-    // Invoice: đọc 4 cột riêng (T=19, U=20, V=21, W=22) - text thuần, dễ đọc trong Sheet
-    function parseCol(v){return String(v||'').split(',').map(s=>s.trim()).filter(Boolean);}
-    const invoiceData={
-      dong: parseCol(row[19]),
-      mat:  parseCol(row[20]),
-      vang: parseCol(row[21]),
-      kem:  parseCol(row[22])
-    };
-    const invoiceRaw = (invoiceData.dong.length||invoiceData.mat.length||invoiceData.vang.length||invoiceData.kem.length) ? 'has' : '';
+    // Vouchers – format "phieu:qty, phieu:qty" hoặc legacy "phieu, phieu"
+    function parseVCol(v){
+      if(!v) return [];
+      try{const p=JSON.parse(v);if(Array.isArray(p))return p.map(s=>({phieu:String(s),qty:0}));}catch(e){}
+      return String(v).split(',').map(s=>s.trim()).filter(Boolean).map(s=>{
+        const pts=s.split(':'); return {phieu:pts[0]?.trim()||s, qty:parseFloat(pts[1])||0};
+      });
+    }
+    const voucherData={dong:parseVCol(row[19]),mat:parseVCol(row[20]),vang:parseVCol(row[21]),kem:parseVCol(row[22])};
+    const soHDraw=String(row[23]||'');
+    const invoiceRaw=Object.values(voucherData).some(a=>a.length)||soHDraw?'has':'';
     const timestamp=timeStr?new Date(timeStr).getTime():0;
     if(!timestamp||isNaN(timestamp)||timestamp<0)return;
     const rKey=routeKey||'HCM-DN';
@@ -974,7 +976,7 @@ function parseSheetRows(rows){
     if(groupId){
       if(!groups[groupId]){
         const g0={pickDate,user,note,timestamp,imgLinks:imgs,trips:[trip],_groupId:groupId,_rowKey:rowKey,_fromSheet:true};
-        if(invoiceRaw)g0['_inv_'+rKey]=invoiceData;
+        g0['_vouchers_'+rKey]=voucherData; if(soHDraw)g0['_hd_'+rKey]=soHDraw;
         if(sheetStatus==='filed'||sheetStatus==='paid')g0['_filed_'+rKey]=true;
         if(sheetStatus==='paid')g0['_paid_'+rKey]=true;
         groups[groupId]=g0;
@@ -987,7 +989,7 @@ function parseSheetRows(rows){
         if(note&&!g.note)g.note=note;
         if(sheetStatus==='filed'||sheetStatus==='paid')g['_filed_'+rKey]=true;
         if(sheetStatus==='paid')g['_paid_'+rKey]=true;
-        if(invoiceRaw)g['_inv_'+rKey]=invoiceData;
+        if(invoiceRaw){g['_vouchers_'+rKey]=voucherData;if(soHDraw)g['_hd_'+rKey]=soHDraw;}
         // Giữ timestamp nhỏ nhất làm đại diện nhóm
         if(!g.timestamp||timestamp<g.timestamp)g.timestamp=timestamp;
       }
@@ -1005,7 +1007,7 @@ function parseSheetRows(rows){
       const autoGroupKey=matchKey||('auto_'+timestamp+'_'+user);
       if(!groups[autoGroupKey]){
         const ag0={pickDate,user,note,timestamp,imgLinks:imgs,trips:[trip],_rowKey:rowKey,_fromSheet:true};
-        if(invoiceRaw)ag0['_inv_'+rKey]=invoiceData;
+        ag0['_vouchers_'+rKey]=voucherData; if(soHDraw)ag0['_hd_'+rKey]=soHDraw;
         if(sheetStatus==='filed'||sheetStatus==='paid')ag0['_filed_'+rKey]=true;
         if(sheetStatus==='paid')ag0['_paid_'+rKey]=true;
         if(actual)ag0['act_'+rKey]=actual;
@@ -1155,14 +1157,15 @@ function buildLogRouteCard(e,eKey,trip){
 
   // Actual section
   let actualHtml='';
-  // Lấy dữ liệu phiếu của tuyến này
-  const invD=e['_inv_'+trip.route]||{dong:[],mat:[],vang:[],kem:[]};
-  function invLine(t){
-    const arr=(invD[t]||[]);
+  // v5: Vouchers có qty + Số HD
+  const vD=e['_vouchers_'+trip.route]||{dong:[],mat:[],vang:[],kem:[]};
+  const soHDdisp=e['_hd_'+trip.route]||'';
+  function vLine(t){
+    const arr=(vD[t]||[]).filter(i=>i.phieu);
     if(!arr.length)return'';
-    return `<div style="padding:1px 0 4px 24px;font-size:11px;color:#92400e;"><span style="background:#fef3c7;border:1px solid #fcd34d;border-radius:5px;padding:2px 8px;font-weight:700;">📄 ${arr.join(' · ')}</span></div>`;
+    const pts=arr.map(i=>i.qty>0?`${i.phieu}(${fmtN(i.qty)})`:i.phieu).join(' · ');
+    return `<div style="padding:2px 0 5px 24px;font-size:11px;"><span style="background:#fef3c7;border:1px solid #fcd34d;border-radius:5px;padding:2px 8px;font-weight:700;color:#92400e;">📋 ${pts}</span></div>`;
   }
-
   if(hasActual){
     const rows2=TYPES.map(t=>{
       const bk=t==='dong'?dk:t==='mat'?mk:t==='vang'?vm:km;
@@ -1171,17 +1174,17 @@ function buildLogRouteCard(e,eKey,trip){
       if(!bk&&!ac)return'';
       const diff=ac-bk;
       const diffEl=diff===0?`<span class="lcr-same">= đúng</span>`:diff>0?`<span class="lcr-pos">+${fmtN(diff)}</span>`:`<span class="lcr-neg">${fmtN(diff)}</span>`;
-      return `<div class="log-compare-row"><span class="lcr-label">${TYPE_ICO[t]} ${TYPE_LBL[t]}</span><span class="lcr-book">${fmtN(bk)} ${unit}</span><span>→</span><span class="lcr-actual">${fmtN(ac)} ${unit}</span>${diffEl}</div>${invLine(t)}`;
+      return `<div class="log-compare-row"><span class="lcr-label">${TYPE_ICO[t]} ${TYPE_LBL[t]}</span><span class="lcr-book">${fmtN(bk)} ${unit}</span><span>→</span><span class="lcr-actual">${fmtN(ac)} ${unit}</span>${diffEl}</div>${vLine(t)}`;
     }).filter(Boolean).join('');
-    actualHtml=`<div class="log-actual"><div class="log-actual-hdr"><span>📦 SỐ THỰC TẾ</span><button class="log-actual-edit-btn" onclick="openActualEdit('${eKey}','${trip.route}')">✏️ Cập nhật</button></div>${rows2}</div>`;
+    actualHtml=`<div class="log-actual"><div class="log-actual-hdr"><span>📦 SỐ THỰC TẾ</span><button class="log-actual-edit-btn" onclick="openCombinedEdit('${eKey}','${trip.route}')">✏️ Cập nhật</button></div>${rows2}</div>`;
   } else {
-    // Không có actual nhưng có thể đã có số phiếu
-    const invRows=TYPES.map(t=>{
-      const arr=(invD[t]||[]);
+    const vRows=TYPES.map(t=>{
+      const arr=(vD[t]||[]).filter(i=>i.phieu);
       if(!arr.length)return'';
-      return `<div class="log-compare-row"><span class="lcr-label">${TYPE_ICO[t]} ${TYPE_LBL[t]}</span><span style="margin-left:6px;font-size:11px;color:#92400e;font-weight:700;background:#fef3c7;border:1px solid #fcd34d;padding:2px 8px;border-radius:5px;">📄 ${arr.join(' · ')}</span></div>`;
+      const pts=arr.map(i=>i.qty>0?`${i.phieu}(${fmtN(i.qty)})`:i.phieu).join(' · ');
+      return `<div class="log-compare-row"><span class="lcr-label">${TYPE_ICO[t]} ${TYPE_LBL[t]}</span><span style="margin-left:6px;font-size:11px;color:#92400e;font-weight:700;background:#fef3c7;border:1px solid #fcd34d;padding:2px 8px;border-radius:5px;">📋 ${pts}</span></div>`;
     }).filter(Boolean).join('');
-    actualHtml=`<div class="log-actual"><div class="log-actual-hdr"><span>📦 SỐ THỰC TẾ</span><button class="log-actual-edit-btn" onclick="openActualEdit('${eKey}','${trip.route}')">+ Nhập số thực tế</button></div>${invRows||'<span class="log-actual-empty">Chưa nhập số thực tế</span>'}</div>`;
+    actualHtml=`<div class="log-actual"><div class="log-actual-hdr"><span>📦 SỐ THỰC TẾ</span><button class="log-actual-edit-btn" onclick="openCombinedEdit('${eKey}','${trip.route}')">+ Nhập số liệu & phiếu</button></div>${vRows||'<span class="log-actual-empty">Chưa nhập số thực tế</span>'}</div>`;
   }
 
   return `<div class="log-card ${cardCls}">
@@ -1198,10 +1201,9 @@ function buildLogRouteCard(e,eKey,trip){
       <button class="btn-ls btn-ls-paid ${isPaid?'on':''}" onclick="toggleStatus('${eKey}','${trip.route}','paid')">✅ TT</button>
       <span class="log-ftr-spacer"></span>
       <button class="btn-ls btn-ls-share" onclick="shareTripLog('${eKey}','${trip.route}')">💬</button>
-      <button class="btn-ls" style="background:#fef3c7;border:1.5px solid #fcd34d;color:#92400e;font-weight:700;" onclick="openInvoiceEdit('${eKey}','${trip.route}')">📄 Số HD</button>
       <button class="btn-ls btn-ls-del" onclick="deleteEntry('${eKey}')">🗑️</button>
     </div>
-    ${''/* số phiếu hiển thị inline trong SỐ THỰC TẾ rồi */}
+    ${soHDdisp?`<div style="background:#fffbeb;border-left:3px solid #f59e0b;padding:6px 12px;font-size:12px;color:#92400e;font-weight:700;">💰 Số HD: ${soHDdisp}</div>`:''}
   </div>`;
 }
 
@@ -1265,73 +1267,124 @@ function shareTripLog(eKey,routeKey){
   else navigator.clipboard.writeText(txt).then(()=>showToast('✅ Đã copy!'));
 }
 
-// ══════════════════════ ACTUAL EDIT ══════════════════════
-function openActualEdit(eKey,routeKey){
-  _actIdx=eKey;_actRoute=routeKey;
-  const e=(window._logEntryMap||{})[eKey];if(!e)return;
+// ══════════════════════ COMBINED EDIT (Số Liệu + Phiếu + HD) ══════════════════════
+let _editEKey='',_editRoute='',_editVouchers={dong:[],mat:[],vang:[],kem:[]},_editHD='';
+
+function openCombinedEdit(eKey,routeKey){
+  _editEKey=eKey; _editRoute=routeKey;
+  const e=(window._logEntryMap||{})[eKey]; if(!e)return;
+  // Load existing vouchers & HD
+  _editVouchers=JSON.parse(JSON.stringify(e['_vouchers_'+routeKey]||{dong:[],mat:[],vang:[],kem:[]}));
+  _editHD=e['_hd_'+routeKey]||'';
   const trip=(e.trips||[]).find(t=>t.route===routeKey)||{};
-  const actual=e['act_'+routeKey]||{};
-  const dk=trip.dk||0,mk=trip.mk||0,vm=trip.vm||0,km=trip.km||0;
-  // Lưu rowKey của TUYến cụ thể (không phải rowKey của group)
-  _actTripRowKey=trip._rowKey||e._rowKey||'';
-  const booked={dong:dk,mat:mk,vang:vm,kem:km};
+  const booked={dong:trip.dk||0,mat:trip.mk||0,vang:trip.vm||0,kem:trip.km||0};
   const rName=ROUTE_NAMES[routeKey]||routeKey;
-  const rows=TYPES.map(t=>`<div class="edit-cargo-row">
-    <span class="edit-type-lbl">${TYPE_ICO[t]} ${TYPE_LBL[t]}</span>
-    <input type="number" min="0" step="0.01" id="act-${t}" placeholder="${fmtN(booked[t])} (đặt)" value="${actual[t]||''}">
-    <span style="font-size:12px;color:var(--muted);">${t==='vang'||t==='kem'?'m³':'kg'}</span>
-  </div>`).join('');
-  $('#editModalTitle').textContent=`📦 Số thực tế – ${rName}`;
-  $('#editBody').innerHTML=`<div style="background:#f0f6ff;border-radius:8px;padding:10px;font-size:12px;color:#1e4976;margin-bottom:12px;">Nhập số <strong>thực tế</strong> sau khi bốc hàng. Để trống = giữ số đặt.</div>${rows}`;
-  _currentSaveAction='actual';
+  $('#editModalTitle').textContent='📦 Cập Nhật – '+rName;
+  $('#editBody').innerHTML=buildCombinedHTML(booked);
+  TYPES.forEach(t=>renderVRows(t));
+  _currentSaveAction='combined';
   $('#editModal').classList.add('open');
 }
 
-async function saveActualEdit(){
-  const e=(window._logEntryMap||{})[_actIdx||''];
-  if(!e){closeEdit();return;}
-  const actual={
-    dong:parseFloat($('#act-dong')?.value)||0,
-    mat:parseFloat($('#act-mat')?.value)||0,
-    vang:parseFloat($('#act-vang')?.value)||0,
-    kem:parseFloat($('#act-kem')?.value)||0
-  };
-  // Ghi vào cache ngay
-  e['act_'+_actRoute]=actual;
-  const eRef={...e};
-  const actRoute=_actRoute;
-  const actTripRowKey=_actTripRowKey;
+function buildCombinedHTML(booked){
+  const rows=TYPES.map(t=>{
+    const unit=t==='vang'||t==='kem'?'m³':'kg';
+    const bk=booked[t]||0;
+    return `<div style="background:var(--bg);border-radius:9px;padding:11px 12px;margin-bottom:10px;border:1.5px solid var(--border);">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:9px;">
+        <span style="font-size:13px;font-weight:800;color:#1e3a5f;">${TYPE_ICO[t]} ${TYPE_LBL[t]}</span>
+        ${bk>0?`<span style="font-size:11px;color:var(--muted);">Đặt: ${fmtN(bk)} ${unit}</span>`:''}
+        <span id="vtot-${t}" style="margin-left:auto;font-size:12px;font-weight:800;color:#f59e0b;"></span>
+      </div>
+      <div id="vrows-${t}" style="margin-bottom:8px;min-height:0;"></div>
+      <div style="display:flex;gap:5px;align-items:center;">
+        <input id="vp-${t}" type="text" placeholder="Số phiếu..." maxlength="40"
+          style="flex:1.4;padding:7px 9px;border:1.5px solid var(--border);border-radius:7px;font-size:13px;font-family:'Be Vietnam Pro',sans-serif;"
+          onkeydown="if(event.key==='Enter'){addV('${t}');event.preventDefault();}">
+        <input id="vq-${t}" type="number" min="0" step="0.01" placeholder="Số lượng"
+          style="flex:1;padding:7px 9px;border:1.5px solid var(--border);border-radius:7px;font-size:13px;font-family:'Be Vietnam Pro',sans-serif;text-align:right;"
+          onkeydown="if(event.key==='Enter'){addV('${t}');event.preventDefault();}">
+        <span style="font-size:11px;color:var(--muted);flex-shrink:0;">${unit}</span>
+        <button onclick="addV('${t}')" style="padding:7px 13px;background:#1e3a5f;color:#fff;border:none;border-radius:7px;font-weight:700;cursor:pointer;font-size:14px;">＋</button>
+      </div>
+    </div>`;
+  }).join('');
+  return rows+`<div style="background:#fffbeb;border:1.5px solid #fcd34d;border-radius:9px;padding:11px 12px;">
+    <div style="font-size:12px;font-weight:800;color:#92400e;margin-bottom:7px;">💰 Số Hoá Đơn (ngày & số HD – không bắt buộc)</div>
+    <input id="vhd" type="text" placeholder="VD: 09/05 HD001, 09/05 HD002..." value="${_editHD}"
+      style="width:100%;padding:9px 11px;border:1.5px solid #fcd34d;border-radius:7px;font-size:13px;font-family:'Be Vietnam Pro',sans-serif;">
+  </div>`;
+}
 
-  // Đóng modal NGAY, không chờ
+function renderVRows(t){
+  const el=document.getElementById('vrows-'+t); if(!el)return;
+  const arr=_editVouchers[t]||[];
+  const unit=t==='vang'||t==='kem'?'m³':'kg';
+  el.innerHTML=arr.map((item,i)=>`
+    <div style="display:flex;align-items:center;gap:6px;padding:4px 0;border-bottom:1px solid var(--border);">
+      <span style="background:#e0f2fe;border-radius:5px;padding:3px 9px;font-size:12px;font-weight:700;color:#0369a1;flex:1.4;">${item.phieu}</span>
+      <span style="font-size:13px;font-weight:800;color:#1e3a5f;flex:1;text-align:right;">${fmtN(item.qty)} ${unit}</span>
+      <button onclick="removeV('${t}',${i})" style="background:none;border:none;color:#dc2626;cursor:pointer;font-size:16px;padding:0 5px;line-height:1;">×</button>
+    </div>`).join('');
+  // Update total
+  const tot=arr.reduce((s,i)=>s+(i.qty||0),0);
+  const span=document.getElementById('vtot-'+t);
+  if(span) span.textContent=tot>0?'Tổng: '+fmtN(tot)+' '+(t==='vang'||t==='kem'?'m³':'kg'):'';
+}
+
+function addV(t){
+  const pEl=document.getElementById('vp-'+t), qEl=document.getElementById('vq-'+t);
+  if(!pEl||!qEl)return;
+  const phieu=pEl.value.trim(); const qty=parseFloat(qEl.value)||0;
+  if(!phieu){showToast('⚠️ Nhập số phiếu!');pEl.focus();return;}
+  if(!_editVouchers[t])_editVouchers[t]=[];
+  _editVouchers[t].push({phieu,qty});
+  renderVRows(t);
+  pEl.value=''; qEl.value=''; pEl.focus();
+}
+
+function removeV(t,idx){
+  if(_editVouchers[t])_editVouchers[t].splice(idx,1);
+  renderVRows(t);
+}
+
+async function saveCombinedEdit(){
+  const e=(window._logEntryMap||{})[_editEKey]; if(!e){closeEdit();return;}
+  const rKey=_editRoute;
+  // Tính tổng actual từ vouchers
+  const act={};
+  TYPES.forEach(t=>{act[t]=(_editVouchers[t]||[]).reduce((s,i)=>s+(i.qty||0),0);});
+  const hdVal=document.getElementById('vhd')?.value?.trim()||'';
+  // Cập nhật cache ngay
+  e['_vouchers_'+rKey]=JSON.parse(JSON.stringify(_editVouchers));
+  e['_hd_'+rKey]=hdVal;
+  if(act.dong||act.mat||act.vang||act.kem) e['act_'+rKey]={dong:act.dong,mat:act.mat,vang:act.vang,kem:act.kem};
   closeEdit();
   renderLog(_sheetCache.concat(_pendingLocal));
-  showToast('⏳ Đang lưu số thực tế...');
-
-  // Sync Sheet nền
-  if(eRef._fromSheet){
-    const s=getSettings();
-    const rk=actTripRowKey||eRef._rowKey;
-    if(s.scriptUrl&&rk){
+  showToast('⏳ Đang lưu...');
+  const s=getSettings();
+  if(s.scriptUrl){
+    const trip=(e.trips||[]).find(t=>t.route===rKey);
+    const rk=trip?._rowKey||e._rowKey||'';
+    if(rk){
       (async()=>{
         try{
           const res=await fetch(s.scriptUrl,{method:'POST',body:JSON.stringify({
-            action:'updateActual',rowKey:rk,route:actRoute,
-            act_dong:actual.dong,act_mat:actual.mat,act_vang:actual.vang,act_kem:actual.kem
+            action:'updateActualAndInvoice',rowKey:rk,
+            act_dong:act.dong,act_mat:act.mat,act_vang:act.vang,act_kem:act.kem,
+            invoiceData:_editVouchers, soHD:hdVal
           })});
           const json=await res.json();
-          if(json.status==='ok'){
-            showToast('✅ Đã cập nhật số thực tế!');
-            setTimeout(()=>loadAndRenderLog(),600);
-          }else showToast('⚠️ Lưu cục bộ, Sheet báo lỗi');
+          if(json.status==='ok'){showToast('✅ Đã lưu lên Sheet!');setTimeout(()=>loadAndRenderLog(),800);}
+          else showToast('⚠️ '+json.msg);
         }catch(err){showToast('✅ Đã lưu cục bộ');}
       })();
     }
-  } else {
-    const pi=_pendingLocal.findIndex(p=>p===eRef);
-    if(pi>=0){_pendingLocal[pi]['act_'+actRoute]=actual;savePending(_pendingLocal);}
-    showToast('✅ Đã lưu số thực tế');
   }
 }
+
+// Stub: redirect cũ về combined (backward compat)
+function openActualEdit(eKey,routeKey){openCombinedEdit(eKey,routeKey);}
 
 // ══════════════════════ TRIP BOARDS ══════════════════════
 function addTrip(){
@@ -1666,119 +1719,9 @@ function closeEdit(){
   $('#editBody').innerHTML='';
 }
 
-// ══════════════════════ INVOICE - MULTI TYPE ══════════════════════
-let _invoiceEIdx='',_invoiceRowKey='',_invoiceRoute='';
-
-// Parse invoice data from entry (supports both old string and new JSON format)
-function parseInvData(raw){
-  if(!raw) return {dong:[],mat:[],vang:[],kem:[]};
-  if(typeof raw === 'object' && !Array.isArray(raw)) return {dong:raw.dong||[],mat:raw.mat||[],vang:raw.vang||[],kem:raw.kem||[]};
-  try{
-    const p=JSON.parse(raw);
-    if(p && typeof p === 'object') return {dong:p.dong||[],mat:p.mat||[],vang:p.vang||[],kem:p.kem||[]};
-  }catch(e){}
-  // Legacy: plain string → put in first available type
-  return {dong:[raw],mat:[],vang:[],kem:[]};
-}
-
-// Render invoice tags in modal
-function renderInvTags(type, arr){
-  const container=document.getElementById('inv-tags-'+type);
-  if(!container)return;
-  container.innerHTML=arr.map((v,i)=>`
-    <span style="display:inline-flex;align-items:center;gap:4px;background:#fef3c7;border:1px solid #fcd34d;color:#92400e;border-radius:6px;padding:3px 8px;font-size:12px;font-weight:700;">
-      ${v}
-      <button onclick="removeInvTag('${type}',${i})" style="background:none;border:none;cursor:pointer;color:#c45c00;font-size:13px;line-height:1;padding:0 2px;">×</button>
-    </span>`).join('');
-}
-
-let _invDataEdit={dong:[],mat:[],vang:[],kem:[]};
-
-function removeInvTag(type, idx){
-  _invDataEdit[type].splice(idx,1);
-  renderInvTags(type, _invDataEdit[type]);
-}
-
-function addInvTag(type){
-  const inp=document.getElementById('inv-input-'+type);
-  if(!inp)return;
-  const val=inp.value.trim();
-  if(!val){showToast('⚠️ Nhập số phiếu trước!');return;}
-  if(!_invDataEdit[type].includes(val)){
-    _invDataEdit[type].push(val);
-    renderInvTags(type, _invDataEdit[type]);
-  }
-  inp.value='';
-  inp.focus();
-}
-
-function openInvoiceEdit(eKey,routeKey){
-  _invoiceEIdx=eKey;_invoiceRowKey='';_invoiceRoute=routeKey||'';
-  const e=(window._logEntryMap||{})[eKey]||{};
-  const curRaw=e['_inv_'+(routeKey||'')]||'';
-  _invDataEdit=parseInvData(curRaw);
-  const rName=ROUTE_NAMES[routeKey]||routeKey||'';
-  
-  // Find which types have data > 0
-  const trip=(e.trips||[]).find(t=>t.route===routeKey)||{};
-  const dk=trip.dk||0,mk=trip.mk||0,vm=trip.vm||0,km=trip.km||0;
-  
-  const typeRows=TYPES.filter(t=>{
-    if(t==='dong')return dk>0||(_invDataEdit.dong||[]).length>0;
-    if(t==='mat')return mk>0||(_invDataEdit.mat||[]).length>0;
-    if(t==='vang')return vm>0||(_invDataEdit.vang||[]).length>0;
-    if(t==='kem')return km>0||(_invDataEdit.kem||[]).length>0;
-    return false;
-  });
-  
-  // If no types have data, show all
-  const showTypes=typeRows.length>0?typeRows:TYPES;
-  
-  $('#editModalTitle').textContent='📄 Số Phiếu – '+rName;
-  $('#editBody').innerHTML='<div style="background:#fff8e1;border:1px solid #fcd34d;border-radius:8px;padding:9px 12px;margin-bottom:14px;font-size:12px;color:#92400e;">Mỗi mặt hàng có thể có nhiều số phiếu. Nhập số phiếu → nhấn <strong>＋ Thêm</strong></div>'+
-    showTypes.map(t=>`
-    <div style="background:var(--bg);border-radius:9px;padding:11px 12px;margin-bottom:10px;border:1.5px solid var(--border);">
-      <div style="font-size:12px;font-weight:800;color:#1e3a5f;margin-bottom:8px;">${TYPE_ICO[t]} ${TYPE_LBL[t]}</div>
-      <div id="inv-tags-${t}" style="display:flex;flex-wrap:wrap;gap:5px;margin-bottom:8px;min-height:24px;"></div>
-      <div style="display:flex;gap:6px;">
-        <input id="inv-input-${t}" type="text" placeholder="Số phiếu..." maxlength="50"
-          style="flex:1;padding:7px 10px;border:1.5px solid var(--border);border-radius:7px;font-size:13px;font-family:'Be Vietnam Pro',sans-serif;"
-          onkeydown="if(event.key==='Enter'){addInvTag('${t}');event.preventDefault();}">
-        <button onclick="addInvTag('${t}')" style="padding:7px 14px;background:#1e3a5f;color:#fff;border:none;border-radius:7px;font-weight:700;cursor:pointer;font-size:13px;">＋ Thêm</button>
-      </div>
-    </div>`).join('');
-  
-  // Render existing tags
-  showTypes.forEach(t=>renderInvTags(t, _invDataEdit[t]||[]));
-  
-  _currentSaveAction='invoice';
-  $('#editModal').classList.add('open');
-}
-
-async function saveInvoiceEdit(){
-  const e=(window._logEntryMap||{})[_invoiceEIdx||''];
-  if(!e){closeEdit();return;}
-  const rKey=_invoiceRoute;
-  // Save the multi-type invoice data
-  e['_inv_'+rKey]=JSON.parse(JSON.stringify(_invDataEdit));
-  closeEdit();
-  renderLog(_sheetCache.concat(_pendingLocal));
-  showToast('⏳ Đang lưu số phiếu...');
-  const s=getSettings();
-  if(s.scriptUrl){
-    const trip=(e.trips||[]).find(t=>t.route===rKey);
-    const rk=trip?._rowKey||e._rowKey||'';
-    (async()=>{
-      try{
-        const res=await fetch(s.scriptUrl,{method:'POST',body:JSON.stringify({
-          action:'updateInvoice',rowKey:rk,invoiceData:_invDataEdit
-        })});
-        const json=await res.json();
-        if(json.status==='ok'){showToast('✅ Đã lưu số phiếu lên Sheet!');setTimeout(()=>loadAndRenderLog(),600);}
-      }catch(err){showToast('✅ Đã lưu cục bộ');}
-    })();
-  }
-}
+// openInvoiceEdit → redirect về combined (backward compat)
+function openInvoiceEdit(eKey,routeKey){openCombinedEdit(eKey,routeKey);}
+async function saveInvoiceEdit(){await saveCombinedEdit();}
 
 function doPrint(){
   const logo=document.querySelector('.hdr-logo img')?.src||'';
