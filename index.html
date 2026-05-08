@@ -134,16 +134,24 @@ textarea{resize:vertical;min-height:52px;}
 .slip-route-totals{display:flex;gap:4px;flex-wrap:wrap;}
 .slip-route-box-body{padding:8px 13px;background:#f8fafc;}
 /* ch rows thin */
-.slip-ch-row{display:flex;align-items:center;gap:6px;padding:3px 0;border-bottom:1px solid #f1f5f9;}
+.slip-ch-row{display:flex;align-items:center;gap:5px;padding:2px 0;border-bottom:1px solid #f1f5f9;}
 .slip-ch-row:last-child{border-bottom:none;}
-.slip-ch-name{font-size:10px;font-weight:400;color:#94a3b8;min-width:100px;flex-shrink:0;}
-.slip-ch-pills{display:flex;flex-wrap:wrap;gap:3px;}
-.scp{font-size:10px;font-weight:400;padding:1px 7px;border-radius:6px;opacity:.9;}
+.slip-ch-name{font-size:9px;font-weight:400;color:#b0bec5;min-width:90px;flex-shrink:0;letter-spacing:.1px;}
+.slip-ch-pills{display:flex;flex-wrap:wrap;gap:2px;}
+.scp{font-size:9px;font-weight:400;padding:1px 6px;border-radius:5px;opacity:.85;}
 .scp-dong{background:#e0f2fe;color:#0369a1;}.scp-mat{background:#fff7ed;color:#c2410c;}
 .scp-vang{background:#f3e8ff;color:#6d28d9;}.scp-kem{background:#ecfdf5;color:#065f46;}
 /* Total box */
 .slip-total-box{background:#fff;border:2px solid #1e3a5f;border-radius:11px;padding:13px 16px;margin-top:12px;position:relative;overflow:hidden;}
 .slip-total-box::before{content:'';position:absolute;top:0;left:0;right:0;height:3px;background:linear-gradient(90deg,#1e3a5f,#0284c7,#f59e0b);}
+/* Per-route card inside total box */
+.slip-route-total-card{margin-bottom:10px;padding-bottom:10px;border-bottom:1px solid #e2e8f0;}
+.slip-route-total-card:last-of-type{margin-bottom:0;padding-bottom:0;border-bottom:none;}
+.slip-route-total-name{font-size:11px;font-weight:700;color:#1e4976;letter-spacing:.5px;margin-bottom:6px;display:flex;align-items:center;gap:5px;}
+/* Grand total separator */
+.slip-grand-total{margin-top:10px;padding-top:10px;border-top:2px solid #1e3a5f;}
+.slip-grand-total .slip-total-lines .slip-total-line .stl-val{color:#1e293b;}
+.slip-grand-total .slip-total-lines .slip-total-line .stl-val strong{font-size:17px;color:#1e3a5f;}
 .slip-total-title{font-size:10px;letter-spacing:2.5px;color:var(--muted);font-weight:600;margin-bottom:9px;text-transform:uppercase;}
 .slip-total-lines{display:flex;flex-direction:column;gap:6px;}
 .slip-total-line{display:flex;align-items:center;gap:9px;font-size:15px;}
@@ -337,7 +345,335 @@ textarea{resize:vertical;min-height:52px;}
   </div>
   <div class="step">
     <div class="step-header"><span class="step-num">📋</span> Code Apps Script</div>
-    <pre id="scriptCode" style="background:#1e293b;color:#e2e8f0;padding:13px;border-radius:9px;font-size:11px;overflow-x:auto;line-height:1.7;white-space:pre-wrap;word-break:break-all;">/* Dán code Apps Script từ hướng dẫn vào đây */</pre>
+    <pre id="scriptCode" style="background:#1e293b;color:#e2e8f0;padding:13px;border-radius:9px;font-size:11px;overflow-x:auto;line-height:1.7;white-space:pre-wrap;word-break:break-all;">// ═══════════════════════════════════════════════════════
+// NHẤT LÂM – BOOK TẢI | Google Apps Script v2
+// ✅ Mỗi tuyến = 1 dòng riêng
+// ✅ Cột actual để đồng bộ số thực tế
+// ✅ GroupID để gộp các tuyến cùng booking
+// ✅ doPost cập nhật actual theo rowKey
+// ✅ doGet?action=getLogs trả về đầy đủ dữ liệu
+// ═══════════════════════════════════════════════════════
+
+const SHEET_NAME  = 'NhatLam_BookTai';
+const FOLDER_NAME = 'NhatLam_AnhBookTai';
+
+// Header 18 cột
+const HEADERS = [
+  'Thời Gian',    // 0  - A
+  'Ngày Bốc',     // 1  - B
+  'Tuyến',        // 2  - C
+  'Người Tạo',    // 3  - D
+  'Đông (kg)',     // 4  - E
+  'Mát (kg)',      // 5  - F
+  'Váng (m³)',     // 6  - G
+  'Kem (m³)',      // 7  - H
+  'Ghi Chú',      // 8  - I
+  'Ảnh 1',        // 9  - J
+  'Ảnh 2',        // 10 - K
+  'Ảnh 3',        // 11 - L
+  'Ảnh 4',        // 12 - M
+  'Actual Đông',  // 13 - N
+  'Actual Mát',   // 14 - O
+  'Actual Váng',  // 15 - P
+  'Actual Kem',   // 16 - Q
+  'Group ID',     // 17 - R
+  'Trạng Thái',   // 18 - S
+  'Số Hoá Đơn'   // 19 - T
+];
+
+// ─── KHỞI TẠO SHEET ─────────────────────────────────────
+function getOrCreateSheet() {
+  const props  = PropertiesService.getScriptProperties();
+  let sheetId  = props.getProperty('SHEET_ID');
+
+  if (sheetId) {
+    try { return SpreadsheetApp.openById(sheetId).getActiveSheet(); }
+    catch(e) { sheetId = null; }
+  }
+
+  const ss    = SpreadsheetApp.create(SHEET_NAME);
+  const sheet = ss.getActiveSheet();
+  sheetId     = ss.getId();
+  props.setProperty('SHEET_ID', sheetId);
+
+  // Di chuyển vào folder nếu có
+  const folderId = props.getProperty('FOLDER_ID');
+  if (folderId) {
+    try {
+      const folder = DriveApp.getFolderById(folderId);
+      const file   = DriveApp.getFileById(sheetId);
+      folder.addFile(file); DriveApp.getRootFolder().removeFile(file);
+    } catch(e) {}
+  }
+
+  // Header
+  const headerRow = sheet.getRange(1, 1, 1, HEADERS.length);
+  sheet.appendRow(HEADERS);
+  const header = sheet.getRange(1, 1, 1, HEADERS.length);
+  header.setBackground('#1e3a5f').setFontColor('#ffffff')
+        .setFontWeight('bold').setFontSize(11);
+  sheet.setFrozenRows(1);
+
+  // Column widths
+  [160,120,160,120,90,90,90,90,200,220,220,220,220,90,90,90,90,160,90,200].forEach((w,i)=&gt;{
+    sheet.setColumnWidth(i+1, w);
+  });
+
+  Logger.log('✅ Sheet: ' + ss.getUrl());
+  return sheet;
+}
+
+function getOrCreateFolder() {
+  const props  = PropertiesService.getScriptProperties();
+  let folderId = props.getProperty('FOLDER_ID');
+  if (folderId) {
+    try { return DriveApp.getFolderById(folderId); }
+    catch(e) { folderId = null; }
+  }
+  const folder = DriveApp.createFolder(FOLDER_NAME);
+  props.setProperty('FOLDER_ID', folder.getId());
+  return folder;
+}
+
+// ─── TÌM DÒNG THEO rowKey ───────────────────────────────
+function findRowByKey(sheet, rowKey) {
+  // rowKey = "groupId|routeKey"  →  so sánh cột R (GroupID) + C (Tuyến)
+  const parts = rowKey.split('|');
+  if (parts.length &lt; 2) return -1;
+  const groupId = parts[0];
+  const route   = parts[1];
+  const lastRow = sheet.getLastRow();
+  if (lastRow &lt; 2) return -1;
+  // Đọc cột C (Tuyến=3) và R (GroupID=18)
+  const data = sheet.getRange(2, 1, lastRow-1, 18).getValues();
+  for (var i = 0; i &lt; data.length; i++) {
+    const cellRoute   = data[i][2]  ? data[i][2].toString().trim()  : '';
+    const cellGroupId = data[i][17] ? data[i][17].toString().trim() : '';
+    if (cellGroupId === groupId &amp;&amp; cellRoute === route) {
+      return i + 2;
+    }
+  }
+  // Fallback: tìm theo timestamp (nếu groupId là số timestamp)
+  const ts = parseFloat(groupId);
+  if (!isNaN(ts)) {
+    for (var j = 0; j &lt; data.length; j++) {
+      const cellTime  = data[j][0] ? new Date(data[j][0]).getTime() : 0;
+      const cellRoute = data[j][2] ? data[j][2].toString().trim()   : '';
+      if (Math.abs(cellTime - ts) &lt; 300000 &amp;&amp; cellRoute === route) {
+        return j + 2;
+      }
+    }
+  }
+  return -1;
+}
+
+// ─── NHẬN DỮ LIỆU TỪ APP (POST) ────────────────────────
+function doPost(e) {
+  try {
+    const data = JSON.parse(e.postData.contents);
+
+    // === Cập nhật số thực tế ===
+    if (data.action === 'updateActual') {
+      const sheet = getOrCreateSheet();
+      const rowNum = findRowByKey(sheet, data.rowKey || '');
+      if (rowNum &gt; 0) {
+        // Ghi vào cột N,O,P,Q (14,15,16,17)
+        if (data.act_dong !== undefined) sheet.getRange(rowNum, 14).setValue(parseFloat(data.act_dong)||0);
+        if (data.act_mat  !== undefined) sheet.getRange(rowNum, 15).setValue(parseFloat(data.act_mat)||0);
+        if (data.act_vang !== undefined) sheet.getRange(rowNum, 16).setValue(parseFloat(data.act_vang)||0);
+        if (data.act_kem  !== undefined) sheet.getRange(rowNum, 17).setValue(parseFloat(data.act_kem)||0);
+        return ok({ updated: rowNum });
+      }
+      return ok({ updated: 0, msg: 'Row not found' });
+    }
+
+    // === Cập nhật trạng thái (status) ===
+    if (data.action === 'updateStatus') {
+      const sheet  = getOrCreateSheet();
+      const status = data.status || 'none';
+      const rowKey = data.rowKey || '';
+      // Luôn ghi theo rowKey cụ thể (1 tuyến), không ghi theo groupId
+      if (rowKey) {
+        var rowNum = findRowByKey(sheet, rowKey);
+        if (rowNum &gt; 0) {
+          sheet.getRange(rowNum, 19).setValue(status);  // col S
+        }
+      }
+      return ok({ updated: rowKey });
+    }
+
+    // === Cập nhật số hoá đơn – chỉ ghi đúng 1 dòng theo rowKey ===
+    if (data.action === 'updateInvoice') {
+      const sheet       = getOrCreateSheet();
+      const invoiceNote = data.invoiceNote || '';
+      const rowKey      = data.rowKey || '';
+      if (rowKey) {
+        var rowNum2 = findRowByKey(sheet, rowKey);
+        if (rowNum2 &gt; 0) sheet.getRange(rowNum2, 20).setValue(invoiceNote);
+      }
+      return ok({ updated: rowKey });
+    }
+
+    // === Lưu booking mới ===
+    const sheet  = getOrCreateSheet();
+    const folder = getOrCreateFolder();
+
+    const now      = new Date();
+    const pickDate = data.pickDate || '';
+    const user     = data.user     || '';
+    const note     = data.note     || '';
+    // GroupID = timestamp ms để gộp nhiều tuyến cùng booking
+    const groupId  = data.groupId || String(now.getTime());
+
+    // Upload ảnh lên Drive (chỉ làm 1 lần cho cả booking)
+    const links = [];
+    (data.images || []).forEach(function(img, i) {
+      if (!img || !img.data) return;
+      const base64 = img.data.split(',')[1];
+      const blob = Utilities.newBlob(
+        Utilities.base64Decode(base64),
+        img.type || 'image/jpeg',
+        (pickDate || 'anh').replace(/\//g,'-') + '_anh' + (i+1) + '.jpg'
+      );
+      const file = folder.createFile(blob);
+      file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+      links.push(file.getUrl());
+    });
+
+    // Lưu từng tuyến = 1 dòng riêng
+    const trips = data.trips || [];
+    const savedRows = [];
+
+    if (trips.length === 0) {
+      // Không có trips → lưu 1 dòng tổng hợp
+      sheet.appendRow([
+        now, pickDate, data.routes||'', user,
+        parseFloat(data.dong_kg)||0, parseFloat(data.mat_kg)||0,
+        parseFloat(data.vang_m3)||0, parseFloat(data.kem_m3)||0,
+        note, links[0]||'', links[1]||'', links[2]||'', links[3]||'',
+        0,0,0,0, groupId, 'none', ''
+      ]);
+      colorRow(sheet, sheet.getLastRow());
+      savedRows.push(sheet.getLastRow());
+    } else {
+      trips.forEach(function(trip, ti) {
+        // Tính tổng từng tuyến từ channels
+        let dk=0,mk=0,vm=0,km=0;
+        const channels = trip.channels || {};
+        Object.values(channels).forEach(function(ch) {
+          if(ch.dong) dk += (ch.dong.u==='tấn') ? (ch.dong.v||0)*1000 : (ch.dong.v||0);
+          if(ch.mat)  mk += (ch.mat.u==='tấn')  ? (ch.mat.v||0)*1000  : (ch.mat.v||0);
+          if(ch.vang) vm += ch.vang.v||0;
+          if(ch.kem)  km += ch.kem.v||0;
+        });
+
+        // Ảnh chỉ gắn vào tuyến đầu tiên
+        const imgs = ti === 0 ? links : [];
+
+        sheet.appendRow([
+          now, pickDate, trip.route||'', user,
+          Math.round(dk*100)/100,
+          Math.round(mk*100)/100,
+          Math.round(vm*100)/100,
+          Math.round(km*100)/100,
+          note,
+          imgs[0]||'', imgs[1]||'', imgs[2]||'', imgs[3]||'',
+          0,0,0,0,
+          groupId,
+          'none', ''
+        ]);
+        colorRow(sheet, sheet.getLastRow());
+        savedRows.push(sheet.getLastRow());
+      });
+    }
+
+    const ss = SpreadsheetApp.openById(
+      PropertiesService.getScriptProperties().getProperty('SHEET_ID')
+    );
+    return ok({ links, sheetUrl: ss.getUrl(), rows: savedRows, groupId });
+
+  } catch (err) {
+    return ContentService
+      .createTextOutput(JSON.stringify({ status:'error', msg: err.toString() }))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+function colorRow(sheet, rowNum) {
+  const color = rowNum % 2 === 0 ? '#f0f6ff' : '#ffffff';
+  sheet.getRange(rowNum, 1, 1, HEADERS.length).setBackground(color);
+}
+
+function ok(extra) {
+  return ContentService
+    .createTextOutput(JSON.stringify(Object.assign({ status:'ok' }, extra)))
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
+// ─── TRẢ VỀ DỮ LIỆU (GET) ──────────────────────────────
+function doGet(e) {
+  try {
+    const props   = PropertiesService.getScriptProperties();
+    const sheetId = props.getProperty('SHEET_ID');
+    const action  = e &amp;&amp; e.parameter &amp;&amp; e.parameter.action;
+
+    if (action === 'getLogs' &amp;&amp; sheetId) {
+      const sheet   = SpreadsheetApp.openById(sheetId).getActiveSheet();
+      const lastRow = sheet.getLastRow();
+
+      if (lastRow &lt;= 1) return ok({ rows: [] });
+
+      const limitParam = parseInt(e.parameter.limit || '200');
+      const dataStart  = Math.max(2, lastRow - limitParam + 1);
+      const numRows    = lastRow - dataStart + 1;
+      const values     = sheet.getRange(dataStart, 1, numRows, HEADERS.length).getValues();
+
+      const rows = values.reverse().map(function(row) {
+        return [
+          row[0]  ? row[0].toString() : '',  // Thời Gian
+          row[1]  || '',   // Ngày Bốc
+          row[2]  || '',   // Tuyến
+          row[3]  || '',   // Người Tạo
+          row[4]  || 0,    // Đông
+          row[5]  || 0,    // Mát
+          row[6]  || 0,    // Váng
+          row[7]  || 0,    // Kem
+          row[8]  || '',   // Ghi Chú
+          row[9]  || '',   // Ảnh 1
+          row[10] || '',   // Ảnh 2
+          row[11] || '',   // Ảnh 3
+          row[12] || '',   // Ảnh 4
+          row[13] || 0,    // Actual Đông
+          row[14] || 0,    // Actual Mát
+          row[15] || 0,    // Actual Váng
+          row[16] || 0,    // Actual Kem
+          row[17] || '',   // Group ID
+          row[18] || 'none', // Trạng Thái
+          row[19] || ''    // Số Hoá Đơn
+        ];
+      });
+      return ok({ rows });
+    }
+
+    const url = sheetId ? SpreadsheetApp.openById(sheetId).getUrl() : 'Chưa có sheet';
+    return ok({ sheetUrl: url });
+
+  } catch(err) {
+    return ContentService
+      .createTextOutput(JSON.stringify({ status:'error', msg: err.toString() }))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+// ─── TEST ────────────────────────────────────────────────
+function testSetup() {
+  const sheet  = getOrCreateSheet();
+  const folder = getOrCreateFolder();
+  Logger.log('Sheet : ' + sheet.getParent().getUrl());
+  Logger.log('Folder: https://drive.google.com/drive/folders/' +
+    PropertiesService.getScriptProperties().getProperty('FOLDER_ID'));
+}
+</pre>
     <button onclick="copyScript()" style="margin-top:9px;padding:8px 14px;background:#f1f5f9;border:1.5px solid var(--border2);border-radius:7px;font-size:13px;font-weight:700;cursor:pointer;font-family:'Be Vietnam Pro',sans-serif;">📋 Copy Code</button>
   </div>
 </main>
@@ -784,13 +1120,10 @@ async function toggleStatus(eKey,routeKey,newStatus){
     const trip=(e.trips||[]).find(t=>t.route===routeKey);
     const rk=trip?._rowKey||e._rowKey;
     if(rk){
-      try{
-        // Gửi rowKey cụ thể của tuyến này, KHÔNG dùng groupId
-        // GAS sẽ chỉ cập nhật đúng 1 dòng
-        await fetch(s.scriptUrl,{method:'POST',body:JSON.stringify({
-          action:'updateStatus',rowKey:rk,groupId:'',status:statusStr
-        })});
-      }catch(err){}
+      // Fire & forget — không await
+      fetch(s.scriptUrl,{method:'POST',body:JSON.stringify({
+        action:'updateStatus',rowKey:rk,groupId:'',status:statusStr
+      })}).catch(()=>{});
     }
   }
 }
@@ -854,34 +1187,41 @@ async function saveActualEdit(){
     vang:parseFloat($('#act-vang')?.value)||0,
     kem:parseFloat($('#act-kem')?.value)||0
   };
-  // Ghi vào cache
+  // Ghi vào cache ngay
   e['act_'+_actRoute]=actual;
-  // Nếu là _fromSheet → sync lên Sheet (dùng rowKey của tuyến cụ thể)
-  if(e._fromSheet){
-    const s=getSettings();
-    const rk=_actTripRowKey||e._rowKey;
-    if(s.scriptUrl&&rk){
-      try{
-        const res=await fetch(s.scriptUrl,{method:'POST',body:JSON.stringify({
-          action:'updateActual',rowKey:rk,route:_actRoute,
-          act_dong:actual.dong,act_mat:actual.mat,act_vang:actual.vang,act_kem:actual.kem
-        })});
-        const json=await res.json();
-        if(json.status==='ok'){
-          showToast('✅ Đã cập nhật số thực tế lên Sheet!');
-          // Reload ngay để máy khác thấy
-          setTimeout(()=>loadAndRenderLog(),600);
-        } else {showToast('⚠️ Lưu cục bộ, Sheet báo lỗi');}
-      }catch(err){showToast('✅ Đã lưu cục bộ (mất mạng)');}
-    }
-  } else {
-    // pending local → update in array
-    const pi=_pendingLocal.findIndex(p=>p===e);
-    if(pi>=0){_pendingLocal[pi]['act_'+_actRoute]=actual;savePending(_pendingLocal);}
-    showToast('✅ Đã lưu số thực tế');
-  }
+  const eRef={...e};
+  const actRoute=_actRoute;
+  const actTripRowKey=_actTripRowKey;
+
+  // Đóng modal NGAY, không chờ
   closeEdit();
   renderLog(_sheetCache.concat(_pendingLocal));
+  showToast('⏳ Đang lưu số thực tế...');
+
+  // Sync Sheet nền
+  if(eRef._fromSheet){
+    const s=getSettings();
+    const rk=actTripRowKey||eRef._rowKey;
+    if(s.scriptUrl&&rk){
+      (async()=>{
+        try{
+          const res=await fetch(s.scriptUrl,{method:'POST',body:JSON.stringify({
+            action:'updateActual',rowKey:rk,route:actRoute,
+            act_dong:actual.dong,act_mat:actual.mat,act_vang:actual.vang,act_kem:actual.kem
+          })});
+          const json=await res.json();
+          if(json.status==='ok'){
+            showToast('✅ Đã cập nhật số thực tế!');
+            setTimeout(()=>loadAndRenderLog(),600);
+          }else showToast('⚠️ Lưu cục bộ, Sheet báo lỗi');
+        }catch(err){showToast('✅ Đã lưu cục bộ');}
+      })();
+    }
+  } else {
+    const pi=_pendingLocal.findIndex(p=>p===eRef);
+    if(pi>=0){_pendingLocal[pi]['act_'+actRoute]=actual;savePending(_pendingLocal);}
+    showToast('✅ Đã lưu số thực tế');
+  }
 }
 
 // ══════════════════════ TRIP BOARDS ══════════════════════
@@ -920,8 +1260,8 @@ function buildTripBoardHTML(trip){
       return `<div class="cargo-box">
         <div class="cargo-box-label ${lblCls}">${TYPE_ICO[t]} ${TYPE_LBL[t].toUpperCase()}</div>
         <div class="cargo-box-input">
-          <input type="number" min="0" step="0.01" placeholder="0" value="${entry.v||''}" oninput="updateCargo(${trip.id},'${ch.id}','${t}','v',this.value)">
-          <select onchange="updateCargo(${trip.id},'${ch.id}','${t}','u',this.value)">${uOpts}</select>
+          <input type="number" min="0" step="0.01" placeholder="0" value="${entry.v||''}" id="inp-${trip.id}-${ch.id}-${t}" oninput="updateCargo(${trip.id},'${ch.id}','${t}','v',this.value)">
+          <select id="sel-${trip.id}-${ch.id}-${t}" onchange="updateCargo(${trip.id},'${ch.id}','${t}','u',this.value)">${uOpts}</select>
         </div>
       </div>`;
     }).join('');
@@ -950,9 +1290,42 @@ function renderTripBoardSubtotals(tripId){
   const board=document.getElementById('trip-'+tripId);
   if(board)board.classList.toggle('has-data',dk+mk+vm+km>0);
 }
+// Đồng bộ toàn bộ DOM input → trips[] object (gọi trước khi submit/summary)
+function syncAllDomToTrips(){
+  trips.forEach(trip=>{
+    CHS.forEach(ch=>{
+      if(!trip.channels[ch.id])trip.channels[ch.id]={};
+      TYPES.forEach(t=>{
+        const vEl=document.getElementById(`inp-${trip.id}-${ch.id}-${t}`);
+        const uEl=document.getElementById(`sel-${trip.id}-${ch.id}-${t}`);
+        if(!trip.channels[ch.id][t])trip.channels[ch.id][t]={v:0,u:TYPE_UNIT[t]};
+        if(vEl)trip.channels[ch.id][t].v=parseFloat(vEl.value)||0;
+        if(uEl)trip.channels[ch.id][t].u=uEl.value||TYPE_UNIT[t];
+      });
+    });
+  });
+}
+
 function calcTripTotal(trip){
   let dk=0,mk=0,vm=0,km=0;
-  CHS.forEach(ch=>{const cd=trip.channels[ch.id]||{};dk+=toKg(cd.dong?.v||0,cd.dong?.u||'kg');mk+=toKg(cd.mat?.v||0,cd.mat?.u||'kg');vm+=cd.vang?.v||0;km+=cd.kem?.v||0;});
+  // Ưu tiên đọc từ DOM nếu có, rồi sync ngược vào trips[]
+  CHS.forEach(ch=>{
+    TYPES.forEach(t=>{
+      const vEl=document.getElementById(`inp-${trip.id}-${ch.id}-${t}`);
+      const uEl=document.getElementById(`sel-${trip.id}-${ch.id}-${t}`);
+      if(vEl){
+        if(!trip.channels[ch.id])trip.channels[ch.id]={};
+        if(!trip.channels[ch.id][t])trip.channels[ch.id][t]={v:0,u:TYPE_UNIT[t]};
+        trip.channels[ch.id][t].v=parseFloat(vEl.value)||0;
+        trip.channels[ch.id][t].u=uEl?uEl.value:TYPE_UNIT[t];
+      }
+    });
+    const cd=trip.channels[ch.id]||{};
+    dk+=toKg(cd.dong?.v||0,cd.dong?.u||'kg');
+    mk+=toKg(cd.mat?.v||0,cd.mat?.u||'kg');
+    vm+=cd.vang?.v||0;
+    km+=cd.kem?.v||0;
+  });
   return{dk,mk,vm,km};
 }
 function recalcLive(){
@@ -1006,6 +1379,7 @@ function handlePasteGlobal(e){
 
 // ══════════════════════ SUMMARY & SAVE ══════════════════════
 function openSummary(){
+  syncAllDomToTrips(); // ← Đồng bộ DOM → trips[] trước khi tính
   const note=$('#noteField').value.trim();
   const s=getSettings();
   let dk=0,mk=0,vm=0,km=0;
@@ -1028,16 +1402,44 @@ function openSummary(){
     });
     routeBoxes+=`<div class="slip-route-box"><div class="slip-route-box-hdr"><span class="slip-route-box-name">🚛 ${rName}</span><div class="slip-route-totals">${totPills.join('')}</div></div><div class="slip-route-box-body">${chRows||'<span style="color:#94a3b8;font-size:11px;">Chưa có dữ liệu</span>'}</div></div>`;
   });
-  const totLines=[];
-  if(dk>0)totLines.push(`<div class="slip-total-line"><span class="stl-bullet stl-dong"></span><span class="stl-val">Đông: <strong>${fmtN(dk)} kg</strong></span></div>`);
-  if(mk>0)totLines.push(`<div class="slip-total-line"><span class="stl-bullet stl-mat"></span><span class="stl-val">Mát: <strong>${fmtN(mk)} kg</strong></span></div>`);
-  if(vm>0)totLines.push(`<div class="slip-total-line"><span class="stl-bullet stl-vang"></span><span class="stl-val">Váng: <strong>${fmtN(vm)} m³</strong></span></div>`);
-  if(km>0)totLines.push(`<div class="slip-total-line"><span class="stl-bullet stl-kem"></span><span class="stl-val">Kem: <strong>${fmtN(km)} m³</strong></span></div>`);
+  // ── Build per-route total lines (thay vì 1 tổng chung) ──
+  let perRouteSummary='';
+  trips.forEach(trip=>{
+    const rName=ROUTE_NAMES[trip.route]||trip.route;
+    const{dk:rdk,mk:rmk,vm:rvm,km:rkm}=calcTripTotal(trip);
+    if(!rdk&&!rmk&&!rvm&&!rkm)return;
+    const lines=[];
+    if(rdk>0)lines.push(`<div class="slip-total-line"><span class="stl-bullet stl-dong"></span><span class="stl-val">Đông: <strong>${fmtN(rdk)} kg</strong></span></div>`);
+    if(rmk>0)lines.push(`<div class="slip-total-line"><span class="stl-bullet stl-mat"></span><span class="stl-val">Mát: <strong>${fmtN(rmk)} kg</strong></span></div>`);
+    if(rvm>0)lines.push(`<div class="slip-total-line"><span class="stl-bullet stl-vang"></span><span class="stl-val">Váng: <strong>${fmtN(rvm)} m³</strong></span></div>`);
+    if(rkm>0)lines.push(`<div class="slip-total-line"><span class="stl-bullet stl-kem"></span><span class="stl-val">Kem: <strong>${fmtN(rkm)} m³</strong></span></div>`);
+    perRouteSummary+=`<div class="slip-route-total-card">
+      <div class="slip-route-total-name">🚛 ${rName}</div>
+      <div class="slip-total-lines">${lines.join('')}</div>
+    </div>`;
+  });
+
+  // Tổng chung nếu >1 tuyến
+  let grandTotalHtml='';
+  if(trips.length>1){
+    const gtLines=[];
+    if(dk>0)gtLines.push(`<div class="slip-total-line"><span class="stl-bullet stl-dong"></span><span class="stl-val">Đông: <strong>${fmtN(dk)} kg</strong></span></div>`);
+    if(mk>0)gtLines.push(`<div class="slip-total-line"><span class="stl-bullet stl-mat"></span><span class="stl-val">Mát: <strong>${fmtN(mk)} kg</strong></span></div>`);
+    if(vm>0)gtLines.push(`<div class="slip-total-line"><span class="stl-bullet stl-vang"></span><span class="stl-val">Váng: <strong>${fmtN(vm)} m³</strong></span></div>`);
+    if(km>0)gtLines.push(`<div class="slip-total-line"><span class="stl-bullet stl-kem"></span><span class="stl-val">Kem: <strong>${fmtN(km)} m³</strong></span></div>`);
+    grandTotalHtml=`<div class="slip-grand-total"><div class="slip-total-title">★ TỔNG TẤT CẢ TUYẾN</div><div class="slip-total-lines">${gtLines.join('')}</div></div>`;
+  }
+
   currentEntry={trips:JSON.parse(JSON.stringify(trips)),dk,mk,vm,km,note,pickDate:getPickDate(),user:s.userName||'',timestamp:Date.now()};
   $('#summaryBody').innerHTML=`
     <div class="slip-meta"><div class="slip-date">📅 ${getPickDate()}</div>${s.userName?`<div class="slip-user">👤 ${s.userName}</div>`:''}</div>
     <div class="slip-section-label">Tuyến vận chuyển</div>${routeBoxes}
-    <div class="slip-total-box"><div class="slip-total-title">📊 Tổng cộng gửi vận tải</div><div class="slip-total-lines">${totLines.length?totLines.join(''):'<span style="color:#64748b">Chưa có dữ liệu</span>'}</div>${note?`<div class="slip-note">📝 ${note}</div>`:''}</div>`;
+    <div class="slip-total-box">
+      <div class="slip-total-title">📊 Tổng cộng gửi vận tải</div>
+      ${perRouteSummary}
+      ${grandTotalHtml}
+      ${note?`<div class="slip-note">📝 ${note}</div>`:''}
+    </div>`;
   $('#summaryModal').classList.add('open');
 }
 
@@ -1045,52 +1447,62 @@ function closeModal(){$('#summaryModal').classList.remove('open');}
 
 async function saveAndClose(){
   if(!currentEntry){closeModal();return;}
-  $('#savingOverlay').classList.add('show');
-  try{
-    // Nén ảnh
-    const b64Imgs=await Promise.all(imgFiles.map(async f=>{
-      if(f.size>500000){
-        return new Promise(res=>{
-          const img=new Image();const url=URL.createObjectURL(f);
-          img.onload=()=>{
-            const canvas=document.createElement('canvas');
-            const MAX=1200;let w=img.width,h=img.height;
-            if(w>MAX){h=Math.round(h*MAX/w);w=MAX;}if(h>MAX){w=Math.round(w*MAX/h);h=MAX;}
-            canvas.width=w;canvas.height=h;canvas.getContext('2d').drawImage(img,0,0,w,h);
-            URL.revokeObjectURL(url);res({data:canvas.toDataURL('image/jpeg',0.75),type:'image/jpeg',name:f.name});
-          };img.onerror=()=>{URL.revokeObjectURL(url);res(null);};img.src=url;
-        });
+
+  // ── Đóng modal & reset form NGAY LẬP TỨC ──
+  closeModal();
+  resetForm();
+  showToast('⏳ Đang lưu nền...');
+
+  // ── Nén ảnh & lưu nền (không block UI) ──
+  const entrySnapshot={...currentEntry};
+  const filesSnapshot=[...imgFiles];
+
+  // Chạy nền
+  (async()=>{
+    try{
+      const b64Imgs=await Promise.all(filesSnapshot.map(async f=>{
+        if(f.size>500000){
+          return new Promise(res=>{
+            const img=new Image();const url=URL.createObjectURL(f);
+            img.onload=()=>{
+              const canvas=document.createElement('canvas');
+              const MAX=1200;let w=img.width,h=img.height;
+              if(w>MAX){h=Math.round(h*MAX/w);w=MAX;}if(h>MAX){w=Math.round(w*MAX/h);h=MAX;}
+              canvas.width=w;canvas.height=h;canvas.getContext('2d').drawImage(img,0,0,w,h);
+              URL.revokeObjectURL(url);res({data:canvas.toDataURL('image/jpeg',0.75),type:'image/jpeg',name:f.name});
+            };img.onerror=()=>{URL.revokeObjectURL(url);res(null);};img.src=url;
+          });
+        }
+        return{data:await fileToB64(f),type:f.type,name:f.name};
+      }));
+      const validImgs=b64Imgs.filter(Boolean);
+      const s=getSettings();
+      if(s.scriptUrl){
+        const groupId=String(entrySnapshot.timestamp);
+        const payload={
+          groupId,pickDate:entrySnapshot.pickDate,user:entrySnapshot.user,
+          note:entrySnapshot.note,images:validImgs,trips:entrySnapshot.trips
+        };
+        const res=await fetch(s.scriptUrl,{method:'POST',body:JSON.stringify(payload)});
+        const json=await res.json();
+        if(json.status==='ok'){
+          showToast('✅ Đã lưu lên Google Sheet!');
+          setTimeout(()=>loadAndRenderLog(),600);
+          return;
+        }
       }
-      return{data:await fileToB64(f),type:f.type,name:f.name};
-    }));
-    const validImgs=b64Imgs.filter(Boolean);
-    const s=getSettings();
-    if(s.scriptUrl){
-      const groupId=String(currentEntry.timestamp);
-      const payload={
-        groupId,pickDate:currentEntry.pickDate,user:currentEntry.user,
-        note:currentEntry.note,images:validImgs,trips:currentEntry.trips
-      };
-      const res=await fetch(s.scriptUrl,{method:'POST',body:JSON.stringify(payload)});
-      const json=await res.json();
-      if(json.status==='ok'){
-        showToast('✅ Đã lưu lên Google Sheet!');
-        closeModal();resetForm();
-        // Reload từ Sheet
-        setTimeout(()=>loadAndRenderLog(),800);
-        return;
-      }
+      // Offline fallback
+      const pending={...entrySnapshot,imgLinks:[],images:validImgs,_pending:true,_groupId:String(entrySnapshot.timestamp)};
+      _pendingLocal.unshift(pending);savePending(_pendingLocal);
+      showToast('📱 Đã lưu cục bộ (sẽ sync khi có mạng)');
+      renderLog(_sheetCache.concat(_pendingLocal));
+    }catch(err){
+      const pending={...entrySnapshot,imgLinks:[],images:[],_pending:true};
+      _pendingLocal.unshift(pending);savePending(_pendingLocal);
+      showToast('📱 Đã lưu cục bộ');
+      renderLog(_sheetCache.concat(_pendingLocal));
     }
-    // Offline fallback
-    const pending={...currentEntry,imgLinks:[],images:[],_pending:true,_groupId:String(currentEntry.timestamp)};
-    _pendingLocal.unshift(pending);savePending(_pendingLocal);
-    showToast('✅ Đã lưu cục bộ (sẽ sync khi có mạng)');
-  }catch(err){
-    const pending={...currentEntry,imgLinks:[],images:[],_pending:true};
-    _pendingLocal.unshift(pending);savePending(_pendingLocal);
-    showToast('✅ Đã lưu cục bộ');
-  }finally{$('#savingOverlay').classList.remove('show');}
-  closeModal();resetForm();renderLog(_sheetCache.concat(_pendingLocal));
+  })();
 }
 
 function resetForm(){
@@ -1165,25 +1577,24 @@ async function saveInvoiceEdit(){
   if(!e){closeEdit();return;}
   const note=$('#invoice-note')?.value?.trim()||'';
   const rKey=_invoiceRoute;
-  // Lưu theo từng tuyến riêng
   e['_inv_'+rKey]=note;
+  // Đóng ngay, không chờ
   closeEdit();
   renderLog(_sheetCache.concat(_pendingLocal));
-  showToast('✅ Đã lưu số hoá đơn');
-  // Sync lên Sheet – tìm đúng rowKey của tuyến này
+  showToast('⏳ Đang lưu số hoá đơn...');
+  // Sync Sheet nền
   const s=getSettings();
   if(s.scriptUrl){
     const trip=(e.trips||[]).find(t=>t.route===rKey);
     const rk=trip?._rowKey||e._rowKey||'';
-    try{
-      const res=await fetch(s.scriptUrl,{method:'POST',body:JSON.stringify({
-        action:'updateInvoice',rowKey:rk,invoiceNote:note
-      })});
-      const json=await res.json();
-      if(json.status==='ok') showToast('✅ Đã lưu số HD lên Sheet!');
-    }catch(err){showToast('✅ Đã lưu cục bộ');}
+    (async()=>{
+      try{
+        const res=await fetch(s.scriptUrl,{method:'POST',body:JSON.stringify({action:'updateInvoice',rowKey:rk,invoiceNote:note})});
+        const json=await res.json();
+        if(json.status==='ok'){showToast('✅ Đã lưu số HD lên Sheet!');setTimeout(()=>loadAndRenderLog(),600);}
+      }catch(err){showToast('✅ Đã lưu cục bộ');}
+    })();
   }
-  setTimeout(()=>loadAndRenderLog(),800);
 }
 
 function doPrint(){
