@@ -340,64 +340,81 @@ textarea{resize:vertical;min-height:52px;}
     <div style="margin-bottom:11px"><label>🔗 Google Apps Script URL</label><input type="url" id="scriptUrl" placeholder="https://script.google.com/macros/s/.../exec"></div>
     <div style="margin-bottom:11px"><label>📊 Link Google Sheet</label><input type="url" id="sheetUrl" placeholder="https://docs.google.com/spreadsheets/d/..."></div>
     <div style="margin-bottom:14px"><label>👤 Tên Người Dùng</label><input type="text" id="userName" placeholder="Tên của bạn"></div>
-    <button onclick="saveSettings()" style="padding:11px 22px;background:#1e3a5f;color:#fff;border:none;border-radius:8px;font-weight:700;font-size:14px;cursor:pointer;font-family:'Be Vietnam Pro',sans-serif;">💾 Lưu Cài Đặt</button>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
+      <button onclick="saveSettings()" style="padding:11px 22px;background:#1e3a5f;color:#fff;border:none;border-radius:8px;font-weight:700;font-size:14px;cursor:pointer;font-family:'Be Vietnam Pro',sans-serif;">💾 Lưu Cài Đặt</button>
+      <button onclick="initSheetSetup()" style="padding:11px 22px;background:#059669;color:#fff;border:none;border-radius:8px;font-weight:700;font-size:14px;cursor:pointer;font-family:'Be Vietnam Pro',sans-serif;">🔧 Khởi Tạo Sheet</button>
+      <button onclick="testConnection()" style="padding:11px 22px;background:#7c3aed;color:#fff;border:none;border-radius:8px;font-weight:700;font-size:14px;cursor:pointer;font-family:'Be Vietnam Pro',sans-serif;">🔌 Kiểm Tra Kết Nối</button>
+    </div>
     <div id="settingsStatus" style="margin-top:9px;"></div>
+    <div id="initSheetStatus" style="margin-top:6px;display:none;"></div>
   </div>
   <div class="step">
-    <div class="step-header"><span class="step-num">📋</span> Code Apps Script</div>
+    <div class="step-header"><span class="step-num">📋</span> Code Apps Script <span style="font-size:11px;color:#f59e0b;font-weight:600;">(v3 – Dán vào Apps Script)</span></div>
+    <div style="background:#fef3c7;border:1px solid #fcd34d;border-radius:8px;padding:10px 13px;margin-bottom:10px;font-size:12px;color:#92400e;">
+      ⚠️ <strong>Quan trọng:</strong> Sau khi dán code mới → Deploy lại dưới dạng Web App → Chọn <strong>"New deployment"</strong> → <strong>Execute as: Me</strong> → <strong>Who has access: Anyone</strong> → Copy URL mới vào Cài Đặt.
+    </div>
     <pre id="scriptCode" style="background:#1e293b;color:#e2e8f0;padding:13px;border-radius:9px;font-size:11px;overflow-x:auto;line-height:1.7;white-space:pre-wrap;word-break:break-all;">// ═══════════════════════════════════════════════════════
-// NHẤT LÂM – BOOK TẢI | Google Apps Script v2
-// ✅ Mỗi tuyến = 1 dòng riêng
-// ✅ Cột actual để đồng bộ số thực tế
-// ✅ GroupID để gộp các tuyến cùng booking
-// ✅ doPost cập nhật actual theo rowKey
-// ✅ doGet?action=getLogs trả về đầy đủ dữ liệu
+// NHẤT LÂM – BOOK TẢI | Google Apps Script v3
+// ✅ Sửa lỗi getOrCreateSheet (dùng getSheetByName thay getActiveSheet)
+// ✅ Action initSheet để khởi tạo tiêu đề từ app
+// ✅ Invoice theo từng loại hàng (JSON)
+// ✅ Mỗi tuyến = 1 dòng riêng | GroupID gộp booking
 // ═══════════════════════════════════════════════════════
 
-const SHEET_NAME  = 'NhatLam_BookTai';
-const FOLDER_NAME = 'NhatLam_AnhBookTai';
+const SHEET_NAME  = &#x27;NhatLam_BookTai&#x27;;
+const FOLDER_NAME = &#x27;NhatLam_AnhBookTai&#x27;;
 
-// Header 18 cột
 const HEADERS = [
-  'Thời Gian',    // 0  - A
-  'Ngày Bốc',     // 1  - B
-  'Tuyến',        // 2  - C
-  'Người Tạo',    // 3  - D
-  'Đông (kg)',     // 4  - E
-  'Mát (kg)',      // 5  - F
-  'Váng (m³)',     // 6  - G
-  'Kem (m³)',      // 7  - H
-  'Ghi Chú',      // 8  - I
-  'Ảnh 1',        // 9  - J
-  'Ảnh 2',        // 10 - K
-  'Ảnh 3',        // 11 - L
-  'Ảnh 4',        // 12 - M
-  'Actual Đông',  // 13 - N
-  'Actual Mát',   // 14 - O
-  'Actual Váng',  // 15 - P
-  'Actual Kem',   // 16 - Q
-  'Group ID',     // 17 - R
-  'Trạng Thái',   // 18 - S
-  'Số Hoá Đơn'   // 19 - T
+  &#x27;Thời Gian&#x27;,    // 0  - A
+  &#x27;Ngày Bốc&#x27;,     // 1  - B
+  &#x27;Tuyến&#x27;,        // 2  - C
+  &#x27;Người Tạo&#x27;,    // 3  - D
+  &#x27;Đông (kg)&#x27;,     // 4  - E
+  &#x27;Mát (kg)&#x27;,      // 5  - F
+  &#x27;Váng (m³)&#x27;,     // 6  - G
+  &#x27;Kem (m³)&#x27;,      // 7  - H
+  &#x27;Ghi Chú&#x27;,      // 8  - I
+  &#x27;Ảnh 1&#x27;,        // 9  - J
+  &#x27;Ảnh 2&#x27;,        // 10 - K
+  &#x27;Ảnh 3&#x27;,        // 11 - L
+  &#x27;Ảnh 4&#x27;,        // 12 - M
+  &#x27;Actual Đông&#x27;,  // 13 - N
+  &#x27;Actual Mát&#x27;,   // 14 - O
+  &#x27;Actual Váng&#x27;,  // 15 - P
+  &#x27;Actual Kem&#x27;,   // 16 - Q
+  &#x27;Group ID&#x27;,     // 17 - R
+  &#x27;Trạng Thái&#x27;,   // 18 - S
+  &#x27;Phiếu Đông&#x27;,   // 19 - T
+  &#x27;Phiếu Mát&#x27;,    // 20 - U
+  &#x27;Phiếu Váng&#x27;,   // 21 - V
+  &#x27;Phiếu Kem&#x27;     // 22 - W
 ];
 
-// ─── KHỞI TẠO SHEET ─────────────────────────────────────
+// ─── KHỞI TẠO / LẤY SHEET ───────────────────────────────
 function getOrCreateSheet() {
   const props  = PropertiesService.getScriptProperties();
-  let sheetId  = props.getProperty('SHEET_ID');
+  let sheetId  = props.getProperty(&#x27;SHEET_ID&#x27;);
 
   if (sheetId) {
-    try { return SpreadsheetApp.openById(sheetId).getActiveSheet(); }
-    catch(e) { sheetId = null; }
+    try {
+      const ss = SpreadsheetApp.openById(sheetId);
+      // BUG FIX v3: dùng getSheetByName thay vì getActiveSheet()
+      // getActiveSheet() có thể trả về sheet sai tab!
+      let sheet = ss.getSheetByName(SHEET_NAME);
+      if (!sheet) sheet = ss.getSheets()[0]; // fallback sheet đầu tiên
+      return sheet;
+    } catch(e) { sheetId = null; }
   }
 
+  // Tạo spreadsheet mới
   const ss    = SpreadsheetApp.create(SHEET_NAME);
-  const sheet = ss.getActiveSheet();
-  sheetId     = ss.getId();
-  props.setProperty('SHEET_ID', sheetId);
+  const sheet = ss.getSheets()[0];
+  sheet.setName(SHEET_NAME);
+  sheetId = ss.getId();
+  props.setProperty(&#x27;SHEET_ID&#x27;, sheetId);
 
   // Di chuyển vào folder nếu có
-  const folderId = props.getProperty('FOLDER_ID');
+  const folderId = props.getProperty(&#x27;FOLDER_ID&#x27;);
   if (folderId) {
     try {
       const folder = DriveApp.getFolderById(folderId);
@@ -406,62 +423,64 @@ function getOrCreateSheet() {
     } catch(e) {}
   }
 
-  // Header
-  const headerRow = sheet.getRange(1, 1, 1, HEADERS.length);
-  sheet.appendRow(HEADERS);
-  const header = sheet.getRange(1, 1, 1, HEADERS.length);
-  header.setBackground('#1e3a5f').setFontColor('#ffffff')
-        .setFontWeight('bold').setFontSize(11);
-  sheet.setFrozenRows(1);
+  initSheetHeaders(sheet);
+  Logger.log(&#x27;✅ Sheet mới: &#x27; + ss.getUrl());
+  return sheet;
+}
 
-  // Column widths
-  [160,120,160,120,90,90,90,90,200,220,220,220,220,90,90,90,90,160,90,200].forEach((w,i)=&gt;{
+// ─── KHỞI TẠO TIÊU ĐỀ (gọi được từ app) ─────────────────
+function initSheetHeaders(sheet) {
+  // Kiểm tra xem hàng 1 đã có tiêu đề chưa
+  if (sheet.getLastRow() &gt; 0) {
+    const firstCell = sheet.getRange(1, 1).getValue();
+    if (firstCell === &#x27;Thời Gian&#x27;) return sheet; // đã có tiêu đề
+    // Dữ liệu không phải tiêu đề → chèn hàng trắng lên trên
+    sheet.insertRowBefore(1);
+  }
+  sheet.getRange(1, 1, 1, HEADERS.length).setValues([HEADERS]);
+  sheet.getRange(1, 1, 1, HEADERS.length)
+       .setBackground(&#x27;#1e3a5f&#x27;).setFontColor(&#x27;#ffffff&#x27;)
+       .setFontWeight(&#x27;bold&#x27;).setFontSize(11);
+  sheet.setFrozenRows(1);
+  [160,120,160,120,90,90,90,90,200,220,220,220,220,90,90,90,90,160,90,120,120,120,120].forEach(function(w,i){
     sheet.setColumnWidth(i+1, w);
   });
-
-  Logger.log('✅ Sheet: ' + ss.getUrl());
   return sheet;
 }
 
 function getOrCreateFolder() {
   const props  = PropertiesService.getScriptProperties();
-  let folderId = props.getProperty('FOLDER_ID');
+  let folderId = props.getProperty(&#x27;FOLDER_ID&#x27;);
   if (folderId) {
     try { return DriveApp.getFolderById(folderId); }
     catch(e) { folderId = null; }
   }
   const folder = DriveApp.createFolder(FOLDER_NAME);
-  props.setProperty('FOLDER_ID', folder.getId());
+  props.setProperty(&#x27;FOLDER_ID&#x27;, folder.getId());
   return folder;
 }
 
 // ─── TÌM DÒNG THEO rowKey ───────────────────────────────
 function findRowByKey(sheet, rowKey) {
-  // rowKey = "groupId|routeKey"  →  so sánh cột R (GroupID) + C (Tuyến)
-  const parts = rowKey.split('|');
+  var parts = rowKey.split(&#x27;|&#x27;);
   if (parts.length &lt; 2) return -1;
-  const groupId = parts[0];
-  const route   = parts[1];
-  const lastRow = sheet.getLastRow();
+  var groupId = parts[0];
+  var route   = parts.slice(1).join(&#x27;|&#x27;); // handle routes with | in name
+  var lastRow = sheet.getLastRow();
   if (lastRow &lt; 2) return -1;
-  // Đọc cột C (Tuyến=3) và R (GroupID=18)
-  const data = sheet.getRange(2, 1, lastRow-1, 18).getValues();
+  var data = sheet.getRange(2, 1, lastRow - 1, 18).getValues();
   for (var i = 0; i &lt; data.length; i++) {
-    const cellRoute   = data[i][2]  ? data[i][2].toString().trim()  : '';
-    const cellGroupId = data[i][17] ? data[i][17].toString().trim() : '';
-    if (cellGroupId === groupId &amp;&amp; cellRoute === route) {
-      return i + 2;
-    }
+    var cellRoute   = data[i][2]  ? String(data[i][2]).trim()  : &#x27;&#x27;;
+    var cellGroupId = data[i][17] ? String(data[i][17]).trim() : &#x27;&#x27;;
+    if (cellGroupId === groupId &amp;&amp; cellRoute === route) return i + 2;
   }
-  // Fallback: tìm theo timestamp (nếu groupId là số timestamp)
-  const ts = parseFloat(groupId);
+  // Fallback theo timestamp
+  var ts = parseFloat(groupId);
   if (!isNaN(ts)) {
     for (var j = 0; j &lt; data.length; j++) {
-      const cellTime  = data[j][0] ? new Date(data[j][0]).getTime() : 0;
-      const cellRoute = data[j][2] ? data[j][2].toString().trim()   : '';
-      if (Math.abs(cellTime - ts) &lt; 300000 &amp;&amp; cellRoute === route) {
-        return j + 2;
-      }
+      var cellTime  = data[j][0] ? new Date(data[j][0]).getTime() : 0;
+      var cellRoute2 = data[j][2] ? String(data[j][2]).trim() : &#x27;&#x27;;
+      if (Math.abs(cellTime - ts) &lt; 300000 &amp;&amp; cellRoute2 === route) return j + 2;
     }
   }
   return -1;
@@ -470,210 +489,232 @@ function findRowByKey(sheet, rowKey) {
 // ─── NHẬN DỮ LIỆU TỪ APP (POST) ────────────────────────
 function doPost(e) {
   try {
-    const data = JSON.parse(e.postData.contents);
+    var data = JSON.parse(e.postData.contents);
+
+    // === Khởi tạo Sheet từ Settings tab ===
+    if (data.action === &#x27;initSheet&#x27;) {
+      var sheet0 = getOrCreateSheet();
+      initSheetHeaders(sheet0);
+      var props0 = PropertiesService.getScriptProperties();
+      var sid0   = props0.getProperty(&#x27;SHEET_ID&#x27;);
+      var url0   = sid0 ? SpreadsheetApp.openById(sid0).getUrl() : &#x27;Chưa có sheet&#x27;;
+      return ok({ sheetUrl: url0, msg: &#x27;Sheet đã được khởi tạo với tiêu đề!&#x27; });
+    }
+
+    // === Kiểm tra kết nối (ping) - doGet cũng xử lý ===
+    if (data.action === &#x27;ping&#x27;) {
+      var props1 = PropertiesService.getScriptProperties();
+      var sid1   = props1.getProperty(&#x27;SHEET_ID&#x27;);
+      var url1   = sid1 ? SpreadsheetApp.openById(sid1).getUrl() : &#x27;Chưa có sheet&#x27;;
+      return ok({ sheetUrl: url1 });
+    }
 
     // === Cập nhật số thực tế ===
-    if (data.action === 'updateActual') {
-      const sheet = getOrCreateSheet();
-      const rowNum = findRowByKey(sheet, data.rowKey || '');
+    if (data.action === &#x27;updateActual&#x27;) {
+      var sheet = getOrCreateSheet();
+      var rowNum = findRowByKey(sheet, data.rowKey || &#x27;&#x27;);
       if (rowNum &gt; 0) {
-        // Ghi vào cột N,O,P,Q (14,15,16,17)
         if (data.act_dong !== undefined) sheet.getRange(rowNum, 14).setValue(parseFloat(data.act_dong)||0);
         if (data.act_mat  !== undefined) sheet.getRange(rowNum, 15).setValue(parseFloat(data.act_mat)||0);
         if (data.act_vang !== undefined) sheet.getRange(rowNum, 16).setValue(parseFloat(data.act_vang)||0);
         if (data.act_kem  !== undefined) sheet.getRange(rowNum, 17).setValue(parseFloat(data.act_kem)||0);
         return ok({ updated: rowNum });
       }
-      return ok({ updated: 0, msg: 'Row not found' });
+      return ok({ updated: 0, msg: &#x27;Row not found: &#x27; + data.rowKey });
     }
 
-    // === Cập nhật trạng thái (status) ===
-    if (data.action === 'updateStatus') {
-      const sheet  = getOrCreateSheet();
-      const status = data.status || 'none';
-      const rowKey = data.rowKey || '';
-      // Luôn ghi theo rowKey cụ thể (1 tuyến), không ghi theo groupId
+    // === Cập nhật trạng thái ===
+    if (data.action === &#x27;updateStatus&#x27;) {
+      var sheet = getOrCreateSheet();
+      var status = data.status || &#x27;none&#x27;;
+      var rowKey = data.rowKey || &#x27;&#x27;;
       if (rowKey) {
-        var rowNum = findRowByKey(sheet, rowKey);
-        if (rowNum &gt; 0) {
-          sheet.getRange(rowNum, 19).setValue(status);  // col S
-        }
+        var rn = findRowByKey(sheet, rowKey);
+        if (rn &gt; 0) sheet.getRange(rn, 19).setValue(status);
       }
       return ok({ updated: rowKey });
     }
 
-    // === Cập nhật số hoá đơn – chỉ ghi đúng 1 dòng theo rowKey ===
-    if (data.action === 'updateInvoice') {
-      const sheet       = getOrCreateSheet();
-      const invoiceNote = data.invoiceNote || '';
-      const rowKey      = data.rowKey || '';
+    // === Cập nhật số hoá đơn (multi-type JSON) ===
+    if (data.action === &#x27;updateInvoice&#x27;) {
+      var sheet       = getOrCreateSheet();
+      var rowKey      = data.rowKey || &#x27;&#x27;;
+      // data.invoiceData = {dong:[], mat:[], vang:[], kem:[]}
+      // hoặc data.invoiceNote (legacy string)
+      var invoiceVal  = &#x27;&#x27;;
+      if (data.invoiceData &amp;&amp; typeof data.invoiceData === &#x27;object&#x27;) {
+        invoiceVal = JSON.stringify(data.invoiceData);
+      } else {
+        invoiceVal = data.invoiceNote || &#x27;&#x27;;
+      }
       if (rowKey) {
-        var rowNum2 = findRowByKey(sheet, rowKey);
-        if (rowNum2 &gt; 0) sheet.getRange(rowNum2, 20).setValue(invoiceNote);
+        var rn2 = findRowByKey(sheet, rowKey);
+        if (rn2 &gt; 0) sheet.getRange(rn2, 20).setValue(invoiceVal);
       }
       return ok({ updated: rowKey });
     }
 
     // === Lưu booking mới ===
-    const sheet  = getOrCreateSheet();
-    const folder = getOrCreateFolder();
+    var sheet  = getOrCreateSheet();
+    var folder = getOrCreateFolder();
 
-    const now      = new Date();
-    const pickDate = data.pickDate || '';
-    const user     = data.user     || '';
-    const note     = data.note     || '';
-    // GroupID = timestamp ms để gộp nhiều tuyến cùng booking
-    const groupId  = data.groupId || String(now.getTime());
+    var now      = new Date();
+    var pickDate = data.pickDate || &#x27;&#x27;;
+    var user     = data.user     || &#x27;&#x27;;
+    var note     = data.note     || &#x27;&#x27;;
+    var groupId  = data.groupId  || String(now.getTime());
 
-    // Upload ảnh lên Drive (chỉ làm 1 lần cho cả booking)
-    const links = [];
+    // Upload ảnh
+    var links = [];
     (data.images || []).forEach(function(img, i) {
       if (!img || !img.data) return;
-      const base64 = img.data.split(',')[1];
-      const blob = Utilities.newBlob(
+      var base64 = img.data.split(&#x27;,&#x27;)[1];
+      var blob = Utilities.newBlob(
         Utilities.base64Decode(base64),
-        img.type || 'image/jpeg',
-        (pickDate || 'anh').replace(/\//g,'-') + '_anh' + (i+1) + '.jpg'
+        img.type || &#x27;image/jpeg&#x27;,
+        (pickDate || &#x27;anh&#x27;).replace(/\/g,&#x27;-&#x27;) + &#x27;_anh&#x27; + (i+1) + &#x27;.jpg&#x27;
       );
-      const file = folder.createFile(blob);
+      var file = folder.createFile(blob);
       file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
       links.push(file.getUrl());
     });
 
-    // Lưu từng tuyến = 1 dòng riêng
-    const trips = data.trips || [];
-    const savedRows = [];
+    // Lưu từng tuyến = 1 dòng
+    var trips     = data.trips || [];
+    var savedRows = [];
 
     if (trips.length === 0) {
-      // Không có trips → lưu 1 dòng tổng hợp
       sheet.appendRow([
-        now, pickDate, data.routes||'', user,
+        now, pickDate, data.routes||&#x27;&#x27;, user,
         parseFloat(data.dong_kg)||0, parseFloat(data.mat_kg)||0,
         parseFloat(data.vang_m3)||0, parseFloat(data.kem_m3)||0,
-        note, links[0]||'', links[1]||'', links[2]||'', links[3]||'',
-        0,0,0,0, groupId, 'none', ''
+        note, links[0]||&#x27;&#x27;, links[1]||&#x27;&#x27;, links[2]||&#x27;&#x27;, links[3]||&#x27;&#x27;,
+        0,0,0,0, groupId, &#x27;none&#x27;, &#x27;&#x27;, &#x27;&#x27;, &#x27;&#x27;, &#x27;&#x27;
       ]);
       colorRow(sheet, sheet.getLastRow());
       savedRows.push(sheet.getLastRow());
     } else {
       trips.forEach(function(trip, ti) {
-        // Tính tổng từng tuyến từ channels
-        let dk=0,mk=0,vm=0,km=0;
-        const channels = trip.channels || {};
+        var dk=0,mk=0,vm=0,km=0;
+        var channels = trip.channels || {};
         Object.values(channels).forEach(function(ch) {
-          if(ch.dong) dk += (ch.dong.u==='tấn') ? (ch.dong.v||0)*1000 : (ch.dong.v||0);
-          if(ch.mat)  mk += (ch.mat.u==='tấn')  ? (ch.mat.v||0)*1000  : (ch.mat.v||0);
-          if(ch.vang) vm += ch.vang.v||0;
-          if(ch.kem)  km += ch.kem.v||0;
+          if (ch.dong) dk += (ch.dong.u === &#x27;tấn&#x27;) ? (ch.dong.v||0)*1000 : (ch.dong.v||0);
+          if (ch.mat)  mk += (ch.mat.u  === &#x27;tấn&#x27;) ? (ch.mat.v||0)*1000  : (ch.mat.v||0);
+          if (ch.vang) vm += ch.vang.v||0;
+          if (ch.kem)  km += ch.kem.v||0;
         });
-
-        // Ảnh chỉ gắn vào tuyến đầu tiên
-        const imgs = ti === 0 ? links : [];
-
+        var imgs = ti === 0 ? links : [];
         sheet.appendRow([
-          now, pickDate, trip.route||'', user,
+          now, pickDate, trip.route||&#x27;&#x27;, user,
           Math.round(dk*100)/100,
           Math.round(mk*100)/100,
           Math.round(vm*100)/100,
           Math.round(km*100)/100,
           note,
-          imgs[0]||'', imgs[1]||'', imgs[2]||'', imgs[3]||'',
+          imgs[0]||&#x27;&#x27;, imgs[1]||&#x27;&#x27;, imgs[2]||&#x27;&#x27;, imgs[3]||&#x27;&#x27;,
           0,0,0,0,
-          groupId,
-          'none', ''
+          groupId, &#x27;none&#x27;, &#x27;&#x27;, &#x27;&#x27;, &#x27;&#x27;, &#x27;&#x27;
         ]);
         colorRow(sheet, sheet.getLastRow());
         savedRows.push(sheet.getLastRow());
       });
     }
 
-    const ss = SpreadsheetApp.openById(
-      PropertiesService.getScriptProperties().getProperty('SHEET_ID')
+    var ss2 = SpreadsheetApp.openById(
+      PropertiesService.getScriptProperties().getProperty(&#x27;SHEET_ID&#x27;)
     );
-    return ok({ links, sheetUrl: ss.getUrl(), rows: savedRows, groupId });
+    return ok({ links: links, sheetUrl: ss2.getUrl(), rows: savedRows, groupId: groupId });
 
   } catch (err) {
     return ContentService
-      .createTextOutput(JSON.stringify({ status:'error', msg: err.toString() }))
+      .createTextOutput(JSON.stringify({ status:&#x27;error&#x27;, msg: err.toString() }))
       .setMimeType(ContentService.MimeType.JSON);
   }
 }
 
 function colorRow(sheet, rowNum) {
-  const color = rowNum % 2 === 0 ? '#f0f6ff' : '#ffffff';
+  var color = rowNum % 2 === 0 ? &#x27;#f0f6ff&#x27; : &#x27;#ffffff&#x27;;
   sheet.getRange(rowNum, 1, 1, HEADERS.length).setBackground(color);
 }
 
 function ok(extra) {
   return ContentService
-    .createTextOutput(JSON.stringify(Object.assign({ status:'ok' }, extra)))
+    .createTextOutput(JSON.stringify(Object.assign({ status:&#x27;ok&#x27; }, extra)))
     .setMimeType(ContentService.MimeType.JSON);
 }
 
 // ─── TRẢ VỀ DỮ LIỆU (GET) ──────────────────────────────
 function doGet(e) {
   try {
-    const props   = PropertiesService.getScriptProperties();
-    const sheetId = props.getProperty('SHEET_ID');
-    const action  = e &amp;&amp; e.parameter &amp;&amp; e.parameter.action;
+    var props   = PropertiesService.getScriptProperties();
+    var sheetId = props.getProperty(&#x27;SHEET_ID&#x27;);
+    var action  = e &amp;&amp; e.parameter &amp;&amp; e.parameter.action;
 
-    if (action === 'getLogs' &amp;&amp; sheetId) {
-      const sheet   = SpreadsheetApp.openById(sheetId).getActiveSheet();
-      const lastRow = sheet.getLastRow();
-
-      if (lastRow &lt;= 1) return ok({ rows: [] });
-
-      const limitParam = parseInt(e.parameter.limit || '200');
-      const dataStart  = Math.max(2, lastRow - limitParam + 1);
-      const numRows    = lastRow - dataStart + 1;
-      const values     = sheet.getRange(dataStart, 1, numRows, HEADERS.length).getValues();
-
-      const rows = values.reverse().map(function(row) {
-        return [
-          row[0]  ? row[0].toString() : '',  // Thời Gian
-          row[1]  || '',   // Ngày Bốc
-          row[2]  || '',   // Tuyến
-          row[3]  || '',   // Người Tạo
-          row[4]  || 0,    // Đông
-          row[5]  || 0,    // Mát
-          row[6]  || 0,    // Váng
-          row[7]  || 0,    // Kem
-          row[8]  || '',   // Ghi Chú
-          row[9]  || '',   // Ảnh 1
-          row[10] || '',   // Ảnh 2
-          row[11] || '',   // Ảnh 3
-          row[12] || '',   // Ảnh 4
-          row[13] || 0,    // Actual Đông
-          row[14] || 0,    // Actual Mát
-          row[15] || 0,    // Actual Váng
-          row[16] || 0,    // Actual Kem
-          row[17] || '',   // Group ID
-          row[18] || 'none', // Trạng Thái
-          row[19] || ''    // Số Hoá Đơn
-        ];
-      });
-      return ok({ rows });
+    // Ping / kiểm tra kết nối
+    if (!action || action === &#x27;ping&#x27;) {
+      var url = sheetId ? SpreadsheetApp.openById(sheetId).getUrl() : &#x27;Chưa có sheet&#x27;;
+      return ok({ sheetUrl: url });
     }
 
-    const url = sheetId ? SpreadsheetApp.openById(sheetId).getUrl() : 'Chưa có sheet';
-    return ok({ sheetUrl: url });
+    if (action === &#x27;getLogs&#x27; &amp;&amp; sheetId) {
+      var sheet   = getOrCreateSheet();
+      var lastRow = sheet.getLastRow();
+      if (lastRow &lt;= 1) return ok({ rows: [] });
+
+      var limitParam = parseInt(e.parameter.limit || &#x27;300&#x27;);
+      var dataStart  = Math.max(2, lastRow - limitParam + 1);
+      var numRows    = lastRow - dataStart + 1;
+      var values     = sheet.getRange(dataStart, 1, numRows, HEADERS.length).getValues();
+
+      var rows = values.reverse().map(function(row) {
+        return [
+          row[0]  ? row[0].toString() : &#x27;&#x27;,
+          row[1]  || &#x27;&#x27;,
+          row[2]  || &#x27;&#x27;,
+          row[3]  || &#x27;&#x27;,
+          row[4]  || 0,
+          row[5]  || 0,
+          row[6]  || 0,
+          row[7]  || 0,
+          row[8]  || &#x27;&#x27;,
+          row[9]  || &#x27;&#x27;,
+          row[10] || &#x27;&#x27;,
+          row[11] || &#x27;&#x27;,
+          row[12] || &#x27;&#x27;,
+          row[13] || 0,
+          row[14] || 0,
+          row[15] || 0,
+          row[16] || 0,
+          row[17] || &#x27;&#x27;,
+          row[18] || &#x27;none&#x27;,
+          row[19] || &#x27;&#x27;,   // Phiếu Đông
+          row[20] || &#x27;&#x27;,   // Phiếu Mát
+          row[21] || &#x27;&#x27;,   // Phiếu Váng
+          row[22] || &#x27;&#x27;    // Phiếu Kem
+        ];
+      });
+      return ok({ rows: rows });
+    }
+
+    var url2 = sheetId ? SpreadsheetApp.openById(sheetId).getUrl() : &#x27;Chưa có sheet&#x27;;
+    return ok({ sheetUrl: url2 });
 
   } catch(err) {
     return ContentService
-      .createTextOutput(JSON.stringify({ status:'error', msg: err.toString() }))
+      .createTextOutput(JSON.stringify({ status:&#x27;error&#x27;, msg: err.toString() }))
       .setMimeType(ContentService.MimeType.JSON);
   }
 }
 
 // ─── TEST ────────────────────────────────────────────────
 function testSetup() {
-  const sheet  = getOrCreateSheet();
-  const folder = getOrCreateFolder();
-  Logger.log('Sheet : ' + sheet.getParent().getUrl());
-  Logger.log('Folder: https://drive.google.com/drive/folders/' +
-    PropertiesService.getScriptProperties().getProperty('FOLDER_ID'));
-}
-</pre>
+  var sheet  = getOrCreateSheet();
+  var folder = getOrCreateFolder();
+  Logger.log(&#x27;Sheet : &#x27; + sheet.getParent().getUrl());
+  Logger.log(&#x27;Sheet tab: &#x27; + sheet.getName());
+  Logger.log(&#x27;Folder: https://drive.google.com/drive/folders/&#x27; +
+    PropertiesService.getScriptProperties().getProperty(&#x27;FOLDER_ID&#x27;));
+}</pre>
     <button onclick="copyScript()" style="margin-top:9px;padding:8px 14px;background:#f1f5f9;border:1.5px solid var(--border2);border-radius:7px;font-size:13px;font-weight:700;cursor:pointer;font-family:'Be Vietnam Pro',sans-serif;">📋 Copy Code</button>
   </div>
 </main>
@@ -752,6 +793,53 @@ function loadSettings(){
   if(s.scriptUrl)$('#scriptUrl').value=s.scriptUrl;
   if(s.sheetUrl)$('#sheetUrl').value=s.sheetUrl;
   if(s.userName)$('#userName').value=s.userName;
+}
+async function initSheetSetup(){
+  const s=getSettings();
+  if(!s.scriptUrl){showToast('⚠️ Chưa nhập Script URL!');return;}
+  const el=$('#initSheetStatus');
+  el.style.display='block';
+  el.innerHTML='<span style="color:#7c3aed;font-weight:700;">⏳ Đang khởi tạo Sheet...</span>';
+  try{
+    const res=await fetch(s.scriptUrl,{method:'POST',body:JSON.stringify({action:'initSheet'})});
+    const json=await res.json();
+    if(json.status==='ok'){
+      if(json.sheetUrl&&json.sheetUrl!=='Chưa có sheet'){
+        $('#sheetUrl').value=json.sheetUrl;
+        saveSettings();
+      }
+      el.innerHTML='<span style="color:#059669;font-weight:700;">✅ '+json.msg+'</span>';
+      showToast('✅ Sheet đã sẵn sàng!');
+    }else{
+      el.innerHTML='<span style="color:#dc2626;font-weight:700;">❌ Lỗi: '+(json.msg||'Không rõ')+'</span>';
+      showToast('❌ Khởi tạo thất bại');
+    }
+  }catch(err){
+    el.innerHTML='<span style="color:#dc2626;font-weight:700;">❌ Không kết nối được Script. Kiểm tra URL và quyền Deploy.</span>';
+    showToast('❌ Lỗi kết nối Script');
+  }
+}
+async function testConnection(){
+  const s=getSettings();
+  if(!s.scriptUrl){showToast('⚠️ Chưa nhập Script URL!');return;}
+  const el=$('#initSheetStatus');
+  el.style.display='block';
+  el.innerHTML='<span style="color:#7c3aed;font-weight:700;">⏳ Đang kiểm tra kết nối...</span>';
+  try{
+    const res=await fetch(s.scriptUrl+'?action=ping');
+    const json=await res.json();
+    if(json.status==='ok'){
+      const url=json.sheetUrl||'';
+      el.innerHTML='<span style="color:#059669;font-weight:700;">✅ Kết nối OK!'+(url&&url!=='Chưa có sheet'?'<br>📊 Sheet: <a href="'+url+'" target="_blank" style="color:#1e4976;">Xem Sheet</a>':'<br>⚠️ Chưa có Sheet – nhấn Khởi Tạo Sheet')+'</span>';
+      if(url&&url!=='Chưa có sheet'&&!s.sheetUrl){$('#sheetUrl').value=url;saveSettings();}
+      showToast('✅ Kết nối thành công!');
+    }else{
+      el.innerHTML='<span style="color:#dc2626;font-weight:700;">❌ Script báo lỗi: '+(json.msg||'')+'</span>';
+    }
+  }catch(err){
+    el.innerHTML='<span style="color:#dc2626;font-weight:700;">❌ Không kết nối được. Kiểm tra URL, Deploy "Anyone".</span>';
+    showToast('❌ Lỗi kết nối');
+  }
 }
 // Pending local (offline fallback)
 function getPending(){try{return JSON.parse(localStorage.getItem('nhatLam_pending')||'[]');}catch(e){return[];}}
@@ -864,10 +952,17 @@ function parseSheetRows(rows){
     const actKem=parseFloat(row[16])||0;
     const groupId=String(row[17]||'');
     const sheetStatus=String(row[18]||'none').trim(); // 'none'|'filed'|'paid'
-    const invoiceNote=String(row[19]||'');
+    // Invoice: đọc 4 cột riêng (T=19, U=20, V=21, W=22) - text thuần, dễ đọc trong Sheet
+    function parseCol(v){return String(v||'').split(',').map(s=>s.trim()).filter(Boolean);}
+    const invoiceData={
+      dong: parseCol(row[19]),
+      mat:  parseCol(row[20]),
+      vang: parseCol(row[21]),
+      kem:  parseCol(row[22])
+    };
+    const invoiceRaw = (invoiceData.dong.length||invoiceData.mat.length||invoiceData.vang.length||invoiceData.kem.length) ? 'has' : '';
     const timestamp=timeStr?new Date(timeStr).getTime():0;
     if(!timestamp||isNaN(timestamp)||timestamp<0)return;
-    // Nếu routeKey không hợp lệ thì dùng nguyên giá trị, không fallback 'HCM-DN'
     const rKey=routeKey||'HCM-DN';
     const rowKey=(groupId||String(timestamp))+'|'+routeKey;
     const trip={id:1,route:rKey,dk,mk,vm,km,channels:{'tong-sheet':{dong:{v:dk,u:'kg'},mat:{v:mk,u:'kg'},vang:{v:vm,u:'m³'},kem:{v:km,u:'m³'}}}};
@@ -879,7 +974,7 @@ function parseSheetRows(rows){
     if(groupId){
       if(!groups[groupId]){
         const g0={pickDate,user,note,timestamp,imgLinks:imgs,trips:[trip],_groupId:groupId,_rowKey:rowKey,_fromSheet:true};
-        if(invoiceNote)g0['_inv_'+rKey]=invoiceNote;
+        if(invoiceRaw)g0['_inv_'+rKey]=invoiceData;
         if(sheetStatus==='filed'||sheetStatus==='paid')g0['_filed_'+rKey]=true;
         if(sheetStatus==='paid')g0['_paid_'+rKey]=true;
         groups[groupId]=g0;
@@ -892,9 +987,9 @@ function parseSheetRows(rows){
         if(note&&!g.note)g.note=note;
         if(sheetStatus==='filed'||sheetStatus==='paid')g['_filed_'+rKey]=true;
         if(sheetStatus==='paid')g['_paid_'+rKey]=true;
-        if(invoiceNote)g['_inv_'+rKey]=invoiceNote;
+        if(invoiceRaw)g['_inv_'+rKey]=invoiceData;
         // Giữ timestamp nhỏ nhất làm đại diện nhóm
-        if(timestamp<g.timestamp)g.timestamp=timestamp;
+        if(!g.timestamp||timestamp<g.timestamp)g.timestamp=timestamp;
       }
     } else {
       // Không có groupId → group theo timestamp gần nhau ±3 phút + cùng user
@@ -910,7 +1005,7 @@ function parseSheetRows(rows){
       const autoGroupKey=matchKey||('auto_'+timestamp+'_'+user);
       if(!groups[autoGroupKey]){
         const ag0={pickDate,user,note,timestamp,imgLinks:imgs,trips:[trip],_rowKey:rowKey,_fromSheet:true};
-        if(invoiceNote)ag0['_inv_'+rKey]=invoiceNote;
+        if(invoiceRaw)ag0['_inv_'+rKey]=invoiceData;
         if(sheetStatus==='filed'||sheetStatus==='paid')ag0['_filed_'+rKey]=true;
         if(sheetStatus==='paid')ag0['_paid_'+rKey]=true;
         if(actual)ag0['act_'+rKey]=actual;
@@ -924,7 +1019,7 @@ function parseSheetRows(rows){
         if(sheetStatus==='filed'||sheetStatus==='paid')g['_filed_'+rKey]=true;
         if(sheetStatus==='paid')g['_paid_'+rKey]=true;
         if(invoiceNote)g['_inv_'+rKey]=invoiceNote;
-        if(timestamp<g.timestamp)g.timestamp=timestamp;
+        if(!g.timestamp||timestamp<g.timestamp)g.timestamp=timestamp;
       }
     }
   });
@@ -1060,6 +1155,14 @@ function buildLogRouteCard(e,eKey,trip){
 
   // Actual section
   let actualHtml='';
+  // Lấy dữ liệu phiếu của tuyến này
+  const invD=e['_inv_'+trip.route]||{dong:[],mat:[],vang:[],kem:[]};
+  function invLine(t){
+    const arr=(invD[t]||[]);
+    if(!arr.length)return'';
+    return `<div style="padding:1px 0 4px 24px;font-size:11px;color:#92400e;"><span style="background:#fef3c7;border:1px solid #fcd34d;border-radius:5px;padding:2px 8px;font-weight:700;">📄 ${arr.join(' · ')}</span></div>`;
+  }
+
   if(hasActual){
     const rows2=TYPES.map(t=>{
       const bk=t==='dong'?dk:t==='mat'?mk:t==='vang'?vm:km;
@@ -1068,11 +1171,17 @@ function buildLogRouteCard(e,eKey,trip){
       if(!bk&&!ac)return'';
       const diff=ac-bk;
       const diffEl=diff===0?`<span class="lcr-same">= đúng</span>`:diff>0?`<span class="lcr-pos">+${fmtN(diff)}</span>`:`<span class="lcr-neg">${fmtN(diff)}</span>`;
-      return `<div class="log-compare-row"><span class="lcr-label">${TYPE_ICO[t]} ${TYPE_LBL[t]}</span><span class="lcr-book">${fmtN(bk)} ${unit}</span><span>→</span><span class="lcr-actual">${fmtN(ac)} ${unit}</span>${diffEl}</div>`;
+      return `<div class="log-compare-row"><span class="lcr-label">${TYPE_ICO[t]} ${TYPE_LBL[t]}</span><span class="lcr-book">${fmtN(bk)} ${unit}</span><span>→</span><span class="lcr-actual">${fmtN(ac)} ${unit}</span>${diffEl}</div>${invLine(t)}`;
     }).filter(Boolean).join('');
     actualHtml=`<div class="log-actual"><div class="log-actual-hdr"><span>📦 SỐ THỰC TẾ</span><button class="log-actual-edit-btn" onclick="openActualEdit('${eKey}','${trip.route}')">✏️ Cập nhật</button></div>${rows2}</div>`;
   } else {
-    actualHtml=`<div class="log-actual"><div class="log-actual-hdr"><span>📦 SỐ THỰC TẾ</span><button class="log-actual-edit-btn" onclick="openActualEdit('${eKey}','${trip.route}')">+ Nhập số thực tế</button></div><span class="log-actual-empty">Chưa nhập số thực tế</span></div>`;
+    // Không có actual nhưng có thể đã có số phiếu
+    const invRows=TYPES.map(t=>{
+      const arr=(invD[t]||[]);
+      if(!arr.length)return'';
+      return `<div class="log-compare-row"><span class="lcr-label">${TYPE_ICO[t]} ${TYPE_LBL[t]}</span><span style="margin-left:6px;font-size:11px;color:#92400e;font-weight:700;background:#fef3c7;border:1px solid #fcd34d;padding:2px 8px;border-radius:5px;">📄 ${arr.join(' · ')}</span></div>`;
+    }).filter(Boolean).join('');
+    actualHtml=`<div class="log-actual"><div class="log-actual-hdr"><span>📦 SỐ THỰC TẾ</span><button class="log-actual-edit-btn" onclick="openActualEdit('${eKey}','${trip.route}')">+ Nhập số thực tế</button></div>${invRows||'<span class="log-actual-empty">Chưa nhập số thực tế</span>'}</div>`;
   }
 
   return `<div class="log-card ${cardCls}">
@@ -1089,10 +1198,10 @@ function buildLogRouteCard(e,eKey,trip){
       <button class="btn-ls btn-ls-paid ${isPaid?'on':''}" onclick="toggleStatus('${eKey}','${trip.route}','paid')">✅ TT</button>
       <span class="log-ftr-spacer"></span>
       <button class="btn-ls btn-ls-share" onclick="shareTripLog('${eKey}','${trip.route}')">💬</button>
-      <button class="btn-ls" style="background:#f1f5f9;border:1.5px solid var(--border2);color:var(--text);" onclick="openInvoiceEdit('${eKey}','${trip.route}')">✏️</button>
+      <button class="btn-ls" style="background:#fef3c7;border:1.5px solid #fcd34d;color:#92400e;font-weight:700;" onclick="openInvoiceEdit('${eKey}','${trip.route}')">📄 Số HD</button>
       <button class="btn-ls btn-ls-del" onclick="deleteEntry('${eKey}')">🗑️</button>
     </div>
-    ${e['_inv_'+trip.route]?`<div style="background:#fefce8;border-left:3px solid #f59e0b;padding:6px 12px;font-size:12px;color:#92400e;border-radius:0 0 8px 8px;">📄 Số HD: ${e['_inv_'+trip.route]}</div>`:''}
+    ${''/* số phiếu hiển thị inline trong SỐ THỰC TẾ rồi */}
   </div>`;
 }
 
@@ -1448,14 +1557,16 @@ function closeModal(){$('#summaryModal').classList.remove('open');}
 async function saveAndClose(){
   if(!currentEntry){closeModal();return;}
 
+  // ── BUG FIX: Snapshot TRƯỚC KHI reset (currentEntry sẽ bị null sau resetForm!) ──
+  const entrySnapshot=JSON.parse(JSON.stringify(currentEntry));
+  const filesSnapshot=[...imgFiles];
+
   // ── Đóng modal & reset form NGAY LẬP TỨC ──
   closeModal();
   resetForm();
   showToast('⏳ Đang lưu nền...');
 
   // ── Nén ảnh & lưu nền (không block UI) ──
-  const entrySnapshot={...currentEntry};
-  const filesSnapshot=[...imgFiles];
 
   // Chạy nền
   (async()=>{
@@ -1555,19 +1666,91 @@ function closeEdit(){
   $('#editBody').innerHTML='';
 }
 
+// ══════════════════════ INVOICE - MULTI TYPE ══════════════════════
 let _invoiceEIdx='',_invoiceRowKey='',_invoiceRoute='';
+
+// Parse invoice data from entry (supports both old string and new JSON format)
+function parseInvData(raw){
+  if(!raw) return {dong:[],mat:[],vang:[],kem:[]};
+  if(typeof raw === 'object' && !Array.isArray(raw)) return {dong:raw.dong||[],mat:raw.mat||[],vang:raw.vang||[],kem:raw.kem||[]};
+  try{
+    const p=JSON.parse(raw);
+    if(p && typeof p === 'object') return {dong:p.dong||[],mat:p.mat||[],vang:p.vang||[],kem:p.kem||[]};
+  }catch(e){}
+  // Legacy: plain string → put in first available type
+  return {dong:[raw],mat:[],vang:[],kem:[]};
+}
+
+// Render invoice tags in modal
+function renderInvTags(type, arr){
+  const container=document.getElementById('inv-tags-'+type);
+  if(!container)return;
+  container.innerHTML=arr.map((v,i)=>`
+    <span style="display:inline-flex;align-items:center;gap:4px;background:#fef3c7;border:1px solid #fcd34d;color:#92400e;border-radius:6px;padding:3px 8px;font-size:12px;font-weight:700;">
+      ${v}
+      <button onclick="removeInvTag('${type}',${i})" style="background:none;border:none;cursor:pointer;color:#c45c00;font-size:13px;line-height:1;padding:0 2px;">×</button>
+    </span>`).join('');
+}
+
+let _invDataEdit={dong:[],mat:[],vang:[],kem:[]};
+
+function removeInvTag(type, idx){
+  _invDataEdit[type].splice(idx,1);
+  renderInvTags(type, _invDataEdit[type]);
+}
+
+function addInvTag(type){
+  const inp=document.getElementById('inv-input-'+type);
+  if(!inp)return;
+  const val=inp.value.trim();
+  if(!val){showToast('⚠️ Nhập số phiếu trước!');return;}
+  if(!_invDataEdit[type].includes(val)){
+    _invDataEdit[type].push(val);
+    renderInvTags(type, _invDataEdit[type]);
+  }
+  inp.value='';
+  inp.focus();
+}
+
 function openInvoiceEdit(eKey,routeKey){
   _invoiceEIdx=eKey;_invoiceRowKey='';_invoiceRoute=routeKey||'';
   const e=(window._logEntryMap||{})[eKey]||{};
-  const cur=e['_inv_'+(routeKey||'')]||'';
+  const curRaw=e['_inv_'+(routeKey||'')]||'';
+  _invDataEdit=parseInvData(curRaw);
   const rName=ROUTE_NAMES[routeKey]||routeKey||'';
-  $('#editModalTitle').textContent='✏️ Số HD – '+rName;
-  $('#editBody').innerHTML=`
-    <div style="margin-bottom:12px;">
-      <label style="font-size:11px;color:var(--muted);font-weight:700;display:block;margin-bottom:5px;letter-spacing:.5px;">📄 SỐ HOÁ ĐƠN / GHI CHÚ</label>
-      <input type="text" id="invoice-note" placeholder="VD: HD001, TT ngày 08/05..." value="${cur}"
-        style="width:100%;padding:10px;border:1.5px solid var(--border);border-radius:8px;font-size:14px;font-family:'Be Vietnam Pro',sans-serif;">
-    </div>`;
+  
+  // Find which types have data > 0
+  const trip=(e.trips||[]).find(t=>t.route===routeKey)||{};
+  const dk=trip.dk||0,mk=trip.mk||0,vm=trip.vm||0,km=trip.km||0;
+  
+  const typeRows=TYPES.filter(t=>{
+    if(t==='dong')return dk>0||(_invDataEdit.dong||[]).length>0;
+    if(t==='mat')return mk>0||(_invDataEdit.mat||[]).length>0;
+    if(t==='vang')return vm>0||(_invDataEdit.vang||[]).length>0;
+    if(t==='kem')return km>0||(_invDataEdit.kem||[]).length>0;
+    return false;
+  });
+  
+  // If no types have data, show all
+  const showTypes=typeRows.length>0?typeRows:TYPES;
+  
+  $('#editModalTitle').textContent='📄 Số Phiếu – '+rName;
+  $('#editBody').innerHTML='<div style="background:#fff8e1;border:1px solid #fcd34d;border-radius:8px;padding:9px 12px;margin-bottom:14px;font-size:12px;color:#92400e;">Mỗi mặt hàng có thể có nhiều số phiếu. Nhập số phiếu → nhấn <strong>＋ Thêm</strong></div>'+
+    showTypes.map(t=>`
+    <div style="background:var(--bg);border-radius:9px;padding:11px 12px;margin-bottom:10px;border:1.5px solid var(--border);">
+      <div style="font-size:12px;font-weight:800;color:#1e3a5f;margin-bottom:8px;">${TYPE_ICO[t]} ${TYPE_LBL[t]}</div>
+      <div id="inv-tags-${t}" style="display:flex;flex-wrap:wrap;gap:5px;margin-bottom:8px;min-height:24px;"></div>
+      <div style="display:flex;gap:6px;">
+        <input id="inv-input-${t}" type="text" placeholder="Số phiếu..." maxlength="50"
+          style="flex:1;padding:7px 10px;border:1.5px solid var(--border);border-radius:7px;font-size:13px;font-family:'Be Vietnam Pro',sans-serif;"
+          onkeydown="if(event.key==='Enter'){addInvTag('${t}');event.preventDefault();}">
+        <button onclick="addInvTag('${t}')" style="padding:7px 14px;background:#1e3a5f;color:#fff;border:none;border-radius:7px;font-weight:700;cursor:pointer;font-size:13px;">＋ Thêm</button>
+      </div>
+    </div>`).join('');
+  
+  // Render existing tags
+  showTypes.forEach(t=>renderInvTags(t, _invDataEdit[t]||[]));
+  
   _currentSaveAction='invoice';
   $('#editModal').classList.add('open');
 }
@@ -1575,23 +1758,23 @@ function openInvoiceEdit(eKey,routeKey){
 async function saveInvoiceEdit(){
   const e=(window._logEntryMap||{})[_invoiceEIdx||''];
   if(!e){closeEdit();return;}
-  const note=$('#invoice-note')?.value?.trim()||'';
   const rKey=_invoiceRoute;
-  e['_inv_'+rKey]=note;
-  // Đóng ngay, không chờ
+  // Save the multi-type invoice data
+  e['_inv_'+rKey]=JSON.parse(JSON.stringify(_invDataEdit));
   closeEdit();
   renderLog(_sheetCache.concat(_pendingLocal));
-  showToast('⏳ Đang lưu số hoá đơn...');
-  // Sync Sheet nền
+  showToast('⏳ Đang lưu số phiếu...');
   const s=getSettings();
   if(s.scriptUrl){
     const trip=(e.trips||[]).find(t=>t.route===rKey);
     const rk=trip?._rowKey||e._rowKey||'';
     (async()=>{
       try{
-        const res=await fetch(s.scriptUrl,{method:'POST',body:JSON.stringify({action:'updateInvoice',rowKey:rk,invoiceNote:note})});
+        const res=await fetch(s.scriptUrl,{method:'POST',body:JSON.stringify({
+          action:'updateInvoice',rowKey:rk,invoiceData:_invDataEdit
+        })});
         const json=await res.json();
-        if(json.status==='ok'){showToast('✅ Đã lưu số HD lên Sheet!');setTimeout(()=>loadAndRenderLog(),600);}
+        if(json.status==='ok'){showToast('✅ Đã lưu số phiếu lên Sheet!');setTimeout(()=>loadAndRenderLog(),600);}
       }catch(err){showToast('✅ Đã lưu cục bộ');}
     })();
   }
