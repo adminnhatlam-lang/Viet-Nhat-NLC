@@ -962,6 +962,7 @@ function parseSheetRows(rows){
     }
     const voucherData={dong:parseVCol(row[19]),mat:parseVCol(row[20]),vang:parseVCol(row[21]),kem:parseVCol(row[22])};
     const soHDraw=String(row[23]||'');
+    const phieuImgUrls=String(row[24]||'').split(',').map(s=>s.trim()).filter(Boolean);
     const invoiceRaw=Object.values(voucherData).some(a=>a.length)||soHDraw?'has':'';
     const timestamp=timeStr?new Date(timeStr).getTime():0;
     if(!timestamp||isNaN(timestamp)||timestamp<0)return;
@@ -977,6 +978,7 @@ function parseSheetRows(rows){
       if(!groups[groupId]){
         const g0={pickDate,user,note,timestamp,imgLinks:imgs,trips:[trip],_groupId:groupId,_rowKey:rowKey,_fromSheet:true};
         g0['_vouchers_'+rKey]=voucherData; if(soHDraw)g0['_hd_'+rKey]=soHDraw;
+        if(phieuImgUrls.length)g0['_phieuImgs_'+rKey]=phieuImgUrls;
         if(sheetStatus==='filed'||sheetStatus==='paid')g0['_filed_'+rKey]=true;
         if(sheetStatus==='paid')g0['_paid_'+rKey]=true;
         groups[groupId]=g0;
@@ -990,6 +992,7 @@ function parseSheetRows(rows){
         if(sheetStatus==='filed'||sheetStatus==='paid')g['_filed_'+rKey]=true;
         if(sheetStatus==='paid')g['_paid_'+rKey]=true;
         if(invoiceRaw){g['_vouchers_'+rKey]=voucherData;if(soHDraw)g['_hd_'+rKey]=soHDraw;}
+        if(phieuImgUrls.length)g['_phieuImgs_'+rKey]=phieuImgUrls;
         // Giữ timestamp nhỏ nhất làm đại diện nhóm
         if(!g.timestamp||timestamp<g.timestamp)g.timestamp=timestamp;
       }
@@ -1008,6 +1011,7 @@ function parseSheetRows(rows){
       if(!groups[autoGroupKey]){
         const ag0={pickDate,user,note,timestamp,imgLinks:imgs,trips:[trip],_rowKey:rowKey,_fromSheet:true};
         ag0['_vouchers_'+rKey]=voucherData; if(soHDraw)ag0['_hd_'+rKey]=soHDraw;
+        if(phieuImgUrls.length)ag0['_phieuImgs_'+rKey]=phieuImgUrls;
         if(sheetStatus==='filed'||sheetStatus==='paid')ag0['_filed_'+rKey]=true;
         if(sheetStatus==='paid')ag0['_paid_'+rKey]=true;
         if(actual)ag0['act_'+rKey]=actual;
@@ -1204,6 +1208,28 @@ function buildLogRouteCard(e,eKey,trip){
       <button class="btn-ls btn-ls-del" onclick="deleteEntry('${eKey}')">🗑️</button>
     </div>
     ${soHDdisp?`<div style="background:#fffbeb;border-left:3px solid #f59e0b;padding:6px 12px;font-size:12px;color:#92400e;font-weight:700;">💰 Số HD: ${soHDdisp}</div>`:''}
+    ${(()=>{
+      const pImgs=e['_phieuImgs_'+trip.route]||[];
+      if(!pImgs.length)return'';
+      const uid='pi_'+eKey.replace(/[^a-z0-9]/gi,'')+'_'+trip.route.replace(/[^a-z0-9]/gi,'');
+      const thumbs=pImgs.map(url=>{
+        const thumb=driveThumbnail(url);
+        return `<div style="flex-shrink:0;width:76px;height:76px;border-radius:8px;overflow:hidden;border:2px solid var(--border);box-shadow:0 1px 4px rgba(0,0,0,.1);">
+          <img src="${thumb}" style="width:100%;height:100%;object-fit:cover;cursor:zoom-in;" onclick="openLightbox('${url}')" loading="lazy">
+        </div>`;
+      }).join('');
+      return `<div style="border-top:1px solid var(--border);">
+        <div onclick="(function(){const d=document.getElementById('${uid}');const a=document.getElementById('${uid}_a');const vis=d.style.display==='flex';d.style.display=vis?'none':'flex';a.textContent=vis?'▶ Xem ảnh':'▼ Ẩn đi';})()" 
+          style="padding:8px 13px;cursor:pointer;display:flex;align-items:center;gap:8px;background:#f1f5f9;user-select:none;transition:background .1s;" 
+          onmouseover="this.style.background='#e2e8f0'" onmouseout="this.style.background='#f1f5f9'">
+          <span style="font-size:12px;font-weight:800;color:#1e4976;">📎 Hình phiếu (${pImgs.length} ảnh)</span>
+          <span id="${uid}_a" style="font-size:11px;color:#64748b;margin-left:auto;">▶ Xem ảnh</span>
+        </div>
+        <div id="${uid}" style="display:none;flex-wrap:wrap;gap:7px;padding:10px 13px;background:#f8fafc;">
+          ${thumbs}
+        </div>
+      </div>`;
+    })()}
   </div>`;
 }
 
@@ -1276,12 +1302,14 @@ function openCombinedEdit(eKey,routeKey){
   // Load existing vouchers & HD
   _editVouchers=JSON.parse(JSON.stringify(e['_vouchers_'+routeKey]||{dong:[],mat:[],vang:[],kem:[]}));
   _editHD=e['_hd_'+routeKey]||'';
+  _editPhieuImgs=(e['_phieuImgs_'+routeKey]||[]).map(url=>({type:'url',url}));
   const trip=(e.trips||[]).find(t=>t.route===routeKey)||{};
   const booked={dong:trip.dk||0,mat:trip.mk||0,vang:trip.vm||0,kem:trip.km||0};
   const rName=ROUTE_NAMES[routeKey]||routeKey;
   $('#editModalTitle').textContent='📦 Cập Nhật – '+rName;
   $('#editBody').innerHTML=buildCombinedHTML(booked);
   TYPES.forEach(t=>renderVRows(t));
+  renderVImgPreview();
   _currentSaveAction='combined';
   $('#editModal').classList.add('open');
 }
@@ -1309,10 +1337,29 @@ function buildCombinedHTML(booked){
       </div>
     </div>`;
   }).join('');
-  return rows+`<div style="background:#fffbeb;border:1.5px solid #fcd34d;border-radius:9px;padding:11px 12px;">
+  return rows+`<div style="background:#fffbeb;border:1.5px solid #fcd34d;border-radius:9px;padding:11px 12px;margin-bottom:10px;">
     <div style="font-size:12px;font-weight:800;color:#92400e;margin-bottom:7px;">💰 Số Hoá Đơn (ngày & số HD – không bắt buộc)</div>
     <input id="vhd" type="text" placeholder="VD: 09/05 HD001, 09/05 HD002..." value="${_editHD}"
       style="width:100%;padding:9px 11px;border:1.5px solid #fcd34d;border-radius:7px;font-size:13px;font-family:'Be Vietnam Pro',sans-serif;">
+  </div>
+  <div style="background:var(--bg);border:1.5px solid var(--border);border-radius:9px;padding:11px 12px;">
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:9px;">
+      <span style="font-size:12px;font-weight:800;color:#1e3a5f;">📎 Hình Ảnh Phiếu</span>
+      <span id="vimg-count" style="font-size:11px;color:var(--muted);font-weight:600;">${_editPhieuImgs.length>0?'('+_editPhieuImgs.length+'/20)':''}</span>
+      <span style="font-size:10px;color:var(--muted2);margin-left:auto;">Ctrl+V · Kéo thả · Bấm chọn · Tối đa 20</span>
+    </div>
+    <div id="vimg-area"
+      style="border:2px dashed #cbd5e1;border-radius:9px;padding:16px 12px;text-align:center;cursor:pointer;background:#fff;transition:all .15s;"
+      onclick="document.getElementById('vimg-file').click()"
+      ondragover="event.preventDefault();this.style.borderColor='#1e4976';this.style.background='#eff6ff';"
+      ondragleave="this.style.borderColor='#cbd5e1';this.style.background='#fff';"
+      ondrop="handleVDrop(event)">
+      <input type="file" id="vimg-file" accept="image/*" multiple style="display:none" onchange="handleVSelect(this)">
+      <div style="font-size:26px;">📷</div>
+      <div style="font-size:12px;font-weight:700;color:#1e3a5f;margin-top:4px;">Nhấn để chọn ảnh phiếu</div>
+      <div style="font-size:11px;color:#94a3b8;margin-top:2px;">hoặc kéo thả · hoặc Ctrl+V để dán</div>
+    </div>
+    <div id="vimg-preview" style="display:flex;flex-wrap:wrap;gap:7px;margin-top:9px;"></div>
   </div>`;
 }
 
@@ -1359,6 +1406,8 @@ async function saveCombinedEdit(){
   e['_vouchers_'+rKey]=JSON.parse(JSON.stringify(_editVouchers));
   e['_hd_'+rKey]=hdVal;
   if(act.dong||act.mat||act.vang||act.kem) e['act_'+rKey]={dong:act.dong,mat:act.mat,vang:act.vang,kem:act.kem};
+  // Update local phieuImgs (only url-type for now; new ones uploaded below)
+  e['_phieuImgs_'+rKey]=_editPhieuImgs.filter(i=>i.type==='url').map(i=>i.url);
   closeEdit();
   renderLog(_sheetCache.concat(_pendingLocal));
   showToast('⏳ Đang lưu...');
@@ -1369,15 +1418,34 @@ async function saveCombinedEdit(){
     if(rk){
       (async()=>{
         try{
+          // 1. Save actual + invoice + HD
           const res=await fetch(s.scriptUrl,{method:'POST',body:JSON.stringify({
             action:'updateActualAndInvoice',rowKey:rk,
             act_dong:act.dong,act_mat:act.mat,act_vang:act.vang,act_kem:act.kem,
             invoiceData:_editVouchers, soHD:hdVal
           })});
           const json=await res.json();
-          if(json.status==='ok'){showToast('✅ Đã lưu lên Sheet!');setTimeout(()=>loadAndRenderLog(),800);}
-          else showToast('⚠️ '+json.msg);
-        }catch(err){showToast('✅ Đã lưu cục bộ');}
+          if(json.status!=='ok'){showToast('⚠️ '+json.msg);return;}
+          // 2. Upload new phieu images (if any)
+          const newImgs=_editPhieuImgs.filter(i=>i.type==='new');
+          if(newImgs.length>0){
+            showToast(`⏳ Đang upload ${newImgs.length} ảnh phiếu...`);
+            const res2=await fetch(s.scriptUrl,{method:'POST',body:JSON.stringify({
+              action:'addPhieuImages',rowKey:rk,
+              images:newImgs.map(i=>({data:i.data,type:'image/jpeg'}))
+            })});
+            const j2=await res2.json();
+            if(j2.status==='ok'&&j2.allUrls){
+              // Update local cache with real Drive URLs
+              const eRef=(window._logEntryMap||{})[_editEKey];
+              if(eRef)eRef['_phieuImgs_'+rKey]=j2.allUrls;
+              showToast(`✅ Đã lưu ${j2.count} ảnh phiếu!`);
+            }
+          } else {
+            showToast('✅ Đã lưu lên Sheet!');
+          }
+          setTimeout(()=>loadAndRenderLog(),800);
+        }catch(err){showToast('✅ Đã lưu cục bộ (lỗi kết nối)');}
       })();
     }
   }
@@ -1717,6 +1785,111 @@ function closeEdit(){
   editIndex=-1;_actIdx='';_actRoute='';_invoiceRowKey='';_invoiceEIdx='';_currentSaveAction='';
   $('#editModalTitle').textContent='✏️ Chỉnh Sửa';
   $('#editBody').innerHTML='';
+}
+
+// ═══════════════ PHIẾU IMAGE HANDLING ════════════════════════════
+let _editPhieuImgs=[]; // [{type:'url',url}|{type:'new',data,name}]
+
+async function compressVImg(file){
+  if(!file)return null;
+  if(file.size<=500000)return fileToB64(file);
+  return new Promise(res=>{
+    const img=new Image(),url=URL.createObjectURL(file);
+    img.onload=()=>{
+      const c=document.createElement('canvas');
+      const MAX=1400;let w=img.width,h=img.height;
+      if(w>MAX){h=Math.round(h*MAX/w);w=MAX;}if(h>MAX){w=Math.round(w*MAX/h);h=MAX;}
+      c.width=w;c.height=h;c.getContext('2d').drawImage(img,0,0,w,h);
+      URL.revokeObjectURL(url);res(c.toDataURL('image/jpeg',0.80));
+    };
+    img.onerror=()=>{URL.revokeObjectURL(url);fileToB64(file).then(res);};
+    img.src=url;
+  });
+}
+
+async function addVImgs(files){
+  const list=Array.from(files||[]).filter(f=>f&&f.type.startsWith('image/'));
+  const slots=20-_editPhieuImgs.length;
+  if(slots<=0){showToast('⚠️ Đã đủ 20 ảnh!');return;}
+  const toAdd=list.slice(0,slots);
+  if(!toAdd.length)return;
+  showToast(`⏳ Đang xử lý ${toAdd.length} ảnh...`);
+  for(const f of toAdd){
+    const data=await compressVImg(f);
+    if(data)_editPhieuImgs.push({type:'new',data,name:f.name||'phieu.jpg'});
+  }
+  renderVImgPreview();
+  showToast(`✅ Đã thêm ${toAdd.length} ảnh (${_editPhieuImgs.length}/20)`);
+}
+
+function handleVSelect(inp){addVImgs(inp.files);inp.value='';}
+function handleVDrop(e){
+  e.preventDefault();
+  e.currentTarget.style.borderColor='#cbd5e1';e.currentTarget.style.background='#fff';
+  addVImgs(e.dataTransfer?.files||[]);
+}
+
+// Intercept paste when modal open
+document.addEventListener('paste',function(e){
+  if(!document.getElementById('editModal')?.classList.contains('open'))return;
+  if(!document.getElementById('vimg-area'))return; // no image area in this modal
+  const imgs=Array.from(e.clipboardData?.items||[]).filter(it=>it.type.startsWith('image/'));
+  if(!imgs.length)return;
+  e.preventDefault();
+  addVImgs(imgs.map(it=>it.getAsFile()).filter(Boolean));
+});
+
+function removeVImg(idx){
+  _editPhieuImgs.splice(idx,1);renderVImgPreview();
+  const cnt=document.getElementById('vimg-count');
+  if(cnt)cnt.textContent=_editPhieuImgs.length>0?`(${_editPhieuImgs.length}/20)`:'';
+}
+
+function driveThumbnail(url){
+  if(!url)return'';
+  const m=(url.match(/\/d\/([a-zA-Z0-9_-]+)/)||url.match(/id=([a-zA-Z0-9_-]+)/));
+  if(m)return`https://lh3.googleusercontent.com/d/${m[1]}=w250`;
+  return url;
+}
+
+function renderVImgPreview(){
+  const el=document.getElementById('vimg-preview');if(!el)return;
+  const cnt=document.getElementById('vimg-count');
+  if(cnt)cnt.textContent=_editPhieuImgs.length>0?`(${_editPhieuImgs.length}/20)`:'';
+  el.innerHTML=_editPhieuImgs.map((img,i)=>{
+    const src=img.type==='url'?driveThumbnail(img.url):img.data;
+    const full=img.type==='url'?img.url:img.data;
+    const tag=img.type==='new'?'<span style="position:absolute;bottom:2px;left:3px;background:rgba(37,99,235,.85);color:#fff;font-size:8px;border-radius:3px;padding:1px 4px;font-weight:700;">MỚI</span>':'';
+    return `<div style="position:relative;width:76px;height:76px;flex-shrink:0;border-radius:9px;overflow:hidden;border:2px solid var(--border);box-shadow:0 1px 4px rgba(0,0,0,.1);">
+      <img src="${src}" style="width:100%;height:100%;object-fit:cover;cursor:zoom-in;"
+        onclick="openLightbox('${full}')" loading="lazy">
+      ${tag}
+      <button onclick="event.stopPropagation();removeVImg(${i})" title="Xoá"
+        style="position:absolute;top:2px;right:2px;background:rgba(220,38,38,.88);border:none;border-radius:50%;width:20px;height:20px;color:#fff;font-size:12px;cursor:pointer;display:flex;align-items:center;justify-content:center;font-weight:700;line-height:1;">×</button>
+    </div>`;
+  }).join('');
+}
+
+// ═══ LIGHTBOX ═══════════════════════════════════════════════════
+function openLightbox(src){
+  let lb=document.getElementById('nl-lightbox');
+  if(!lb){
+    lb=document.createElement('div');lb.id='nl-lightbox';
+    lb.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.93);z-index:10000;display:none;flex-direction:column;align-items:center;justify-content:center;';
+    lb.onclick=function(e){if(e.target===lb)lb.style.display='none';};
+    document.body.appendChild(lb);
+    document.addEventListener('keydown',function(e){if(e.key==='Escape'&&lb.style.display!=='none')lb.style.display='none';});
+  }
+  lb.innerHTML=`
+    <button onclick="document.getElementById('nl-lightbox').style.display='none'"
+      style="position:absolute;top:16px;right:20px;background:rgba(255,255,255,.18);border:none;border-radius:50%;width:42px;height:42px;color:#fff;font-size:22px;cursor:pointer;display:flex;align-items:center;justify-content:center;z-index:1;">×</button>
+    <img src="${src}" style="max-width:95vw;max-height:90vh;border-radius:10px;box-shadow:0 16px 80px rgba(0,0,0,.7);cursor:default;object-fit:contain;"
+      onclick="event.stopPropagation()">
+    <a href="${src}" target="_blank"
+      style="margin-top:10px;color:#93c5fd;font-size:12px;text-decoration:none;padding:4px 12px;background:rgba(255,255,255,.1);border-radius:6px;">
+      🔗 Mở ảnh gốc
+    </a>`;
+  lb.style.display='flex';
 }
 
 // openInvoiceEdit → redirect về combined (backward compat)
