@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Nhất Lâm – Điều Chuyển Hàng Hóa</title>
+<link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;600;700;800;900&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --green:#5aab5e;--green2:#7ec882;--yellow:#fef9c3;--yellow2:#fef08a;
+  --font:'Be Vietnam Pro','Segoe UI',Arial,sans-serif;
+}
+body{font-family:var(--font);min-height:100vh;background:#fff;color:#1a1a1a;display:flex;flex-direction:column;}
+
+/* HEADER */
+.header{
+  background:linear-gradient(135deg,#fefce8 0%,#fef9c3 100%);
+  border-bottom:2px solid #f0e060;
+  padding:20px 24px 18px;
+  display:flex;align-items:center;gap:14px;
+}
+.logo{
+  width:48px;height:48px;border-radius:50%;
+  background:linear-gradient(135deg,var(--green),#388e3c);
+  display:flex;align-items:center;justify-content:center;
+  font-size:18px;font-weight:900;color:#fff;
+  box-shadow:0 3px 10px rgba(90,171,94,.35);flex-shrink:0;
+}
+.brand h1{font-size:17px;font-weight:900;color:#1a1a1a;line-height:1.2}
+.brand p{font-size:12px;color:#888;margin-top:2px}
+
+/* MAIN */
+.main{flex:1;padding:32px 20px 40px;max-width:740px;margin:0 auto;width:100%;}
+.section-title{text-align:center;margin-bottom:28px}
+.section-title h2{font-size:22px;font-weight:900;color:#1a1a1a}
+.section-title p{font-size:13px;color:#888;margin-top:6px}
+
+/* ROLE CARDS */
+.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:16px;}
+
+.role-card{
+  background:#fff;
+  border:2px solid #e8e8d8;
+  border-radius:16px;
+  padding:28px 20px 22px;
+  text-align:center;
+  cursor:pointer;
+  text-decoration:none;
+  color:inherit;
+  transition:all .2s ease;
+  box-shadow:0 2px 12px rgba(0,0,0,.06);
+  display:block;
+  position:relative;
+  overflow:hidden;
+}
+.role-card::before{
+  content:'';position:absolute;top:0;left:0;right:0;height:4px;
+  border-radius:16px 16px 0 0;
+}
+.role-card.thukho::before{background:linear-gradient(90deg,#5aab5e,#7ec882);}
+.role-card.quanlykho::before{background:linear-gradient(90deg,#1e88e5,#64b5f6);}
+.role-card.logistics::before{background:linear-gradient(90deg,#f57c00,#ffb74d);}
+
+.role-card:hover{
+  transform:translateY(-4px);
+  box-shadow:0 8px 28px rgba(0,0,0,.12);
+  border-color:transparent;
+}
+.role-card.thukho:hover{border-color:#5aab5e;}
+.role-card.quanlykho:hover{border-color:#1e88e5;}
+.role-card.logistics:hover{border-color:#f57c00;}
+
+.role-icon{font-size:44px;margin-bottom:14px;display:block;line-height:1;}
+.role-name{font-size:16px;font-weight:800;margin-bottom:6px;}
+.role-card.thukho .role-name{color:#2e7d32;}
+.role-card.quanlykho .role-name{color:#1565c0;}
+.role-card.logistics .role-name{color:#e65100;}
+
+.role-desc{font-size:11px;color:#888;line-height:1.5;margin-bottom:16px;}
+.role-btn{
+  display:inline-block;padding:8px 20px;border-radius:20px;
+  font-size:12px;font-weight:700;color:#fff;
+  border:none;cursor:pointer;
+  transition:opacity .15s;
+}
+.role-btn:hover{opacity:.88;}
+.thukho .role-btn{background:#5aab5e;}
+.quanlykho .role-btn{background:#1e88e5;}
+.logistics .role-btn{background:#f57c00;}
+
+/* URL HINT */
+.url-section{
+  margin-top:36px;
+  background:#f9f9f5;
+  border:1.5px solid #e8e8d8;
+  border-radius:12px;
+  padding:18px 20px;
+}
+.url-section h3{font-size:13px;font-weight:800;color:#444;margin-bottom:12px;}
+.url-row{
+  display:flex;align-items:center;gap:10px;
+  padding:8px 0;border-bottom:1px solid #f0f0f0;font-size:12px;
+}
+.url-row:last-child{border-bottom:none;padding-bottom:0;}
+.url-badge{
+  padding:2px 10px;border-radius:10px;font-size:10px;font-weight:700;
+  white-space:nowrap;flex-shrink:0;
+}
+.url-badge.g{background:#e8f5e9;color:#2e7d32;}
+.url-badge.b{background:#e3f2fd;color:#1565c0;}
+.url-badge.o{background:#fff3e0;color:#e65100;}
+.url-code{color:#888;font-family:monospace;font-size:11px;word-break:break-all;}
+
+/* FOOTER */
+.footer{text-align:center;padding:20px;font-size:11px;color:#bbb;border-top:1px solid #f0f0f0;}
+
+/* MOBILE */
+@media(max-width:480px){
+  .cards{grid-template-columns:1fr;}
+  .main{padding:20px 16px 32px;}
+  .role-card{padding:22px 18px 18px;display:flex;align-items:center;gap:14px;text-align:left;}
+  .role-icon{font-size:36px;margin-bottom:0;flex-shrink:0;}
+  .role-card::before{top:0;left:0;right:auto;bottom:0;width:4px;height:auto;border-radius:16px 0 0 16px;}
+}
+</style>
+</head>
+<body>
+
+<!-- HEADER -->
+<div class="header">
+  <div class="logo">NL</div>
+  <div class="brand">
+    <h1>NHẤT LÂM</h1>
+    <p>Hệ thống Đăng Ký & Theo Dõi Điều Chuyển Hàng</p>
+  </div>
+</div>
+
+<!-- MAIN -->
+<div class="main">
+  <div class="section-title">
+    <h2>Chọn Vai Trò</h2>
+    <p>Bấm vào phần phù hợp với công việc của bạn</p>
+  </div>
+
+  <div class="cards">
+
+    <!-- THỦ KHO -->
+    <a class="role-card thukho" href="app.html?page=thukho">
+      <span class="role-icon">🏭</span>
+      <div class="role-name">Thủ Kho</div>
+      <p class="role-desc">
+        Đăng ký điều chuyển hàng mới,<br>
+        theo dõi đơn đang xử lý,<br>
+        xác nhận hàng nhập kho.
+      </p>
+      <span class="role-btn">Vào ngay →</span>
+    </a>
+
+    <!-- QUẢN LÝ KHO -->
+    <a class="role-card quanlykho" href="app.html?page=quanlykho">
+      <span class="role-icon">✅</span>
+      <div class="role-name">Quản Lý Kho</div>
+      <p class="role-desc">
+        Xét duyệt yêu cầu điều chuyển,<br>
+        duyệt hoặc từ chối từng dòng hàng,<br>
+        theo dõi toàn bộ phiếu.
+      </p>
+      <span class="role-btn">Vào ngay →</span>
+    </a>
+
+    <!-- LOGISTICS -->
+    <a class="role-card logistics" href="app.html?page=logistics">
+      <span class="role-icon">🚚</span>
+      <div class="role-name">Logistics</div>
+      <p class="role-desc">
+        Xếp xe & lên lịch điều chuyển,<br>
+        xác nhận số xe theo từng dòng,<br>
+        báo cáo thống kê vận chuyển.
+      </p>
+      <span class="role-btn">Vào ngay →</span>
+    </a>
+
+  </div>
+
+  <!-- URL REFERENCE -->
+  <div class="url-section">
+    <h3>🔗 Link Trực Tiếp Theo Vai Trò</h3>
+    <div class="url-row">
+      <span class="url-badge g">Thủ Kho</span>
+      <span class="url-code">https://your-site.io/app.html?page=thukho</span>
+    </div>
+    <div class="url-row">
+      <span class="url-badge b">Quản Lý</span>
+      <span class="url-code">https://your-site.io/app.html?page=quanlykho</span>
+    </div>
+    <div class="url-row">
+      <span class="url-badge o">Logistics</span>
+      <span class="url-code">https://your-site.io/app.html?page=logistics</span>
+    </div>
+  </div>
+
+</div>
+
+<div class="footer">Nhất Lâm – Hệ Thống Điều Chuyển Hàng Hóa Nội Bộ</div>
+
+</body>
+</html>
